@@ -1,0 +1,27 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+.env
+.env.local
+
+# Runtime state: call recordings, SQLite, downloaded models.
+data/
+models/
+knowledge/*
+!knowledge/.gitkeep
+!knowledge/README.md
+
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

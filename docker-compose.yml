@@ -1,0 +1,102 @@
+# Full self-hosted stack. Nothing here calls out to the internet at runtime,
+# which is the whole point for an on-premise or government-cloud deployment.
+#
+#   docker compose up -d                      # mock providers, no GPU
+#   docker compose --profile ai up -d         # + Ollama and Qdrant
+#
+services:
+  vaani:
+    build: .
+    container_name: vaani
+    restart: unless-stopped
+    ports:
+      - '8080:8080'   # HTTP API + WebSocket media
+      - '9092:9092'   # Asterisk AudioSocket
+    environment:
+      VAANI_HOST: 0.0.0.0
+      VAANI_PORT: 8080
+      VAANI_LOG_LEVEL: INFO
+      # Switch these to the real providers once the ai profile is up.
+      VAANI_STT_PROVIDER: ${VAANI_STT_PROVIDER:-mock}
+      VAANI_LLM_PROVIDER: ${VAANI_LLM_PROVIDER:-mock}
+      VAANI_TTS_PROVIDER: ${VAANI_TTS_PROVIDER:-mock}
+      VAANI_LLM_BASE_URL: http://ollama:11434/v1
+      VAANI_LLM_MODEL: ${VAANI_LLM_MODEL:-qwen2.5:7b-instruct}
+      VAANI_VECTOR_STORE: ${VAANI_VECTOR_STORE:-memory}
+      VAANI_QDRANT_URL: http://qdrant:6333
+      VAANI_DATABASE_URL: postgresql+asyncpg://vaani:vaani@postgres:5432/vaani
+      VAANI_REDIS_URL: redis://redis:6379/0
+    volumes:
+      - vaani-data:/app/data
+      - vaani-models:/app/models
+      - ./knowledge:/app/knowledge:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'python', '-c',
+             "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/api/health')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 40s
+      retries: 3
+
+  postgres:
+    image: postgres:17-alpine
+    container_name: vaani-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: vaani
+      POSTGRES_PASSWORD: vaani   # override in any real deployment
+      POSTGRES_DB: vaani
+    volumes:
+      - vaani-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U vaani']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: vaani-redis
+    restart: unless-stopped
+    command: redis-server --save '' --appendonly no
+    volumes:
+      - vaani-redis:/data
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: vaani-qdrant
+    restart: unless-stopped
+    profiles: ['ai']
+    ports:
+      - '6333:6333'
+    volumes:
+      - vaani-qdrant:/qdrant/storage
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: vaani-ollama
+    restart: unless-stopped
+    profiles: ['ai']
+    ports:
+      - '11434:11434'
+    volumes:
+      - vaani-ollama:/root/.ollama
+    # Remove this block on a CPU-only host.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  vaani-data:
+  vaani-models:
+  vaani-postgres:
+  vaani-redis:
+  vaani-qdrant:
+  vaani-ollama:

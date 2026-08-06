@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Vaani — Voice Agent Console</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --line: #30363d;
+    --fg: #e6edf3; --dim: #8b949e;
+    --accent: #2f81f7; --ok: #3fb950; --warn: #d29922; --err: #f85149;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f6f8fa; --panel:#fff; --line:#d8dee4; --fg:#1f2328; --dim:#656d76; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    padding: 16px 24px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  }
+  h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  .tag {
+    font-size: 12px; color: var(--dim); border: 1px solid var(--line);
+    padding: 2px 8px; border-radius: 999px;
+  }
+  main { display: grid; grid-template-columns: 1fr 340px; gap: 20px; padding: 20px 24px; }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .panel h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--dim); margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--line);
+  }
+  #log { height: 60vh; min-height: 340px; overflow-y: auto; padding: 16px; }
+  .msg { margin-bottom: 14px; display: flex; gap: 10px; }
+  .who {
+    flex: 0 0 62px; font-size: 11px; text-transform: uppercase;
+    letter-spacing: .05em; color: var(--dim); padding-top: 3px;
+  }
+  .msg.caller .who { color: var(--accent); }
+  .msg.agent .who { color: var(--ok); }
+  .msg.sys { font-size: 13px; color: var(--dim); }
+  .body { flex: 1; white-space: pre-wrap; word-break: break-word; }
+  .meta { font-size: 12px; color: var(--dim); margin-top: 3px; font-variant-numeric: tabular-nums; }
+  .controls { padding: 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  button {
+    font: inherit; font-weight: 600; padding: 9px 18px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--fg); cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { background: var(--err); border-color: var(--err); color: #fff; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  input, select {
+    font: inherit; padding: 8px 10px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--fg);
+  }
+  .state {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 13px; font-weight: 600;
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--dim); }
+  .dot.listening { background: var(--accent); animation: pulse 1.6s infinite; }
+  .dot.thinking  { background: var(--warn); animation: pulse .8s infinite; }
+  .dot.speaking  { background: var(--ok); animation: pulse 1s infinite; }
+  .dot.ended     { background: var(--err); }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .3 } }
+  #meter { width: 100%; height: 5px; background: var(--line); border-radius: 3px; overflow: hidden; }
+  #meterFill { height: 100%; width: 0%; background: var(--accent); transition: width .07s linear; }
+  dl.stats { margin: 0; padding: 14px 16px; font-size: 13px; }
+  dl.stats div { display: flex; justify-content: space-between; padding: 5px 0; }
+  dl.stats dt { color: var(--dim); }
+  dl.stats dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .kb { padding: 14px 16px; display: grid; gap: 9px; }
+  textarea {
+    font: inherit; width: 100%; min-height: 90px; padding: 9px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--fg); resize: vertical;
+  }
+  .note { font-size: 12px; color: var(--dim); padding: 0 16px 14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Vaani</h1>
+  <span class="tag">voice agent console</span>
+  <span class="state"><span class="dot" id="dot"></span><span id="stateText">idle</span></span>
+  <span class="tag" id="providers">—</span>
+</header>
+
+<main>
+  <div>
+    <div class="panel">
+      <h2>Conversation</h2>
+      <div id="log"></div>
+      <div class="controls">
+        <button class="primary" id="call">Start call</button>
+        <button class="danger" id="hangup" disabled>Hang up</button>
+        <select id="agent"><option value="default">default</option></select>
+        <input id="dtmf" placeholder="DTMF" maxlength="1" style="width:70px" />
+      </div>
+      <div style="padding: 0 16px 16px"><div id="meter"><div id="meterFill"></div></div></div>
+    </div>
+  </div>
+
+  <div style="display:grid; gap:20px; align-content:start">
+    <div class="panel">
+      <h2>This call</h2>
+      <dl class="stats">
+        <div><dt>Turns</dt><dd id="sTurns">0</dd></div>
+        <div><dt>Last STT</dt><dd id="sStt">—</dd></div>
+        <div><dt>Last think</dt><dd id="sAgent">—</dd></div>
+        <div><dt>First audio</dt><dd id="sTts">—</dd></div>
+        <div><dt>Turn total</dt><dd id="sTotal">—</dd></div>
+        <div><dt>Barge-ins</dt><dd id="sBarge">0</dd></div>
+      </dl>
+    </div>
+
+    <div class="panel">
+      <h2>Teach the agent</h2>
+      <div class="kb">
+        <textarea id="kbText" placeholder="Paste a policy, FAQ or circular. It is chunked, embedded and searchable immediately."></textarea>
+        <input id="kbSource" placeholder="source name, e.g. tariff-2026.pdf" />
+        <button id="kbAdd">Add to knowledge base</button>
+      </div>
+      <div class="note" id="kbNote">The agent will cite whatever you add here.</div>
+    </div>
+  </div>
+</main>
+
+<script>
+// Audio contract with the server: PCM16, mono, 16 kHz, both directions.
+const RATE = 16000;
+
+const el = id => document.getElementById(id);
+const log = el('log');
+let ws = null, ctx = null, micNode = null, micStream = null;
+let playAt = 0, turns = 0, bargeIns = 0;
+
+function line(role, text, meta) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  if (role === 'sys') {
+    div.innerHTML = `<div class="body">${escapeHtml(text)}</div>`;
+  } else {
+    div.innerHTML =
+      `<div class="who">${role}</div>` +
+      `<div class="body">${escapeHtml(text)}${meta ? `<div class="meta">${escapeHtml(meta)}</div>` : ''}</div>`;
+  }
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+const escapeHtml = s => String(s).replace(/[&<>"]/g, c =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function setState(s) {
+  el('stateText').textContent = s;
+  el('dot').className = 'dot ' + s;
+}
+
+// --- capture -------------------------------------------------------------
+// An AudioWorklet on the audio thread, not a ScriptProcessor: capture must not
+// glitch when the main thread is busy rendering the transcript.
+const WORKLET = `
+class Capture extends AudioWorkletProcessor {
+  process(inputs) {
+    const ch = inputs[0][0];
+    if (!ch) return true;
+    const pcm = new Int16Array(ch.length);
+    let peak = 0;
+    for (let i = 0; i < ch.length; i++) {
+      const s = Math.max(-1, Math.min(1, ch[i]));
+      pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      const a = Math.abs(s); if (a > peak) peak = a;
+    }
+    this.port.postMessage({ pcm: pcm.buffer, peak }, [pcm.buffer]);
+    return true;
+  }
+}
+registerProcessor('capture', Capture);
+`;
+
+async function startCall() {
+  el('call').disabled = true;
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        // The browser's own DSP is better than anything we would add server
+        // side, and echo cancellation is what stops the agent hearing itself
+        // through the speakers and barging in on its own voice.
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      }
+    });
+  } catch (e) {
+    line('sys', 'Microphone permission denied — ' + e.message);
+    el('call').disabled = false;
+    return;
+  }
+
+  ctx = new AudioContext({ sampleRate: RATE });
+  await ctx.audioWorklet.addModule(
+    URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' })));
+
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws/call?agent=${encodeURIComponent(el('agent').value)}`);
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ type: 'start', client: 'web-console' }));
+    const src = ctx.createMediaStreamSource(micStream);
+    micNode = new AudioWorkletNode(ctx, 'capture');
+    micNode.port.onmessage = ev => {
+      el('meterFill').style.width = Math.min(100, ev.data.peak * 180) + '%';
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(ev.data.pcm);
+    };
+    src.connect(micNode);
+    // Worklets are only pulled when connected to a destination. Route through a
+    // muted gain node so capture runs without echoing the mic to the speakers.
+    const mute = ctx.createGain(); mute.gain.value = 0;
+    micNode.connect(mute).connect(ctx.destination);
+    playAt = ctx.currentTime;
+    el('hangup').disabled = false;
+    turns = 0; bargeIns = 0;
+  };
+
+  ws.onmessage = ev => {
+    if (typeof ev.data === 'string') return handleEvent(JSON.parse(ev.data));
+    playPcm(new Int16Array(ev.data));
+  };
+  ws.onclose = () => { line('sys', 'Call ended.'); teardown(); };
+  ws.onerror = () => line('sys', 'Connection error.');
+}
+
+// --- playback ------------------------------------------------------------
+// Chunks are scheduled back to back on the audio clock rather than played on
+// arrival, which is what keeps speech gapless under variable network timing.
+function playPcm(int16) {
+  if (!ctx || !int16.length) return;
+  const buf = ctx.createBuffer(1, int16.length, RATE);
+  const ch = buf.getChannelData(0);
+  for (let i = 0; i < int16.length; i++) ch[i] = int16[i] / 32768;
+  const node = ctx.createBufferSource();
+  node.buffer = buf;
+  node.connect(ctx.destination);
+  const now = ctx.currentTime;
+  if (playAt < now) playAt = now + 0.02;
+  node.start(playAt);
+  playAt += buf.duration;
+  playing.push(node);
+}
+let playing = [];
+function stopPlayback() {
+  // Barge-in: everything already scheduled has to be killed, not just muted.
+  playing.forEach(n => { try { n.stop(); } catch (_) {} });
+  playing = [];
+  if (ctx) playAt = ctx.currentTime;
+}
+
+function handleEvent(msg) {
+  switch (msg.type) {
+    case 'call_start': line('sys', 'Call ' + msg.call_id + ' connected.'); break;
+    case 'state': setState(msg.state); break;
+    case 'transcript':
+      if (msg.role === 'caller') line('caller', msg.text, msg.language ? 'lang: ' + msg.language : '');
+      break;
+    case 'speech': line('agent', msg.text); break;
+    case 'barge_in': stopPlayback(); bargeIns++; el('sBarge').textContent = bargeIns; break;
+    case 'metrics':
+      turns++;
+      el('sTurns').textContent = turns;
+      el('sStt').textContent = msg.stt_ms + ' ms';
+      el('sAgent').textContent = msg.agent_ms + ' ms';
+      el('sTts').textContent = msg.tts_first_chunk_ms + ' ms';
+      el('sTotal').textContent = msg.total_ms + ' ms';
+      break;
+    case 'transfer': line('sys', 'Transferring to ' + msg.department + ' — ' + msg.reason); break;
+    case 'rejected': line('sys', 'Rejected: ' + msg.reason); break;
+    case 'call_end':
+      if (msg.record && msg.record.summary) line('sys', 'Summary: ' + msg.record.summary);
+      break;
+  }
+}
+
+function teardown() {
+  stopPlayback();
+  if (micNode) { micNode.disconnect(); micNode = null; }
+  if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+  if (ctx) { ctx.close(); ctx = null; }
+  ws = null;
+  el('call').disabled = false;
+  el('hangup').disabled = true;
+  setState('idle');
+}
+
+el('call').onclick = startCall;
+el('hangup').onclick = () => {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'hangup' }));
+  teardown();
+};
+el('dtmf').oninput = e => {
+  const d = e.target.value.trim();
+  if (d && ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'dtmf', digit: d }));
+  e.target.value = '';
+};
+
+el('kbAdd').onclick = async () => {
+  const text = el('kbText').value.trim();
+  if (!text) return;
+  el('kbAdd').disabled = true;
+  try {
+    const res = await fetch('/api/knowledge/text', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text, source: el('kbSource').value.trim() || 'console-entry',
+        agent_key: el('agent').value
+      })
+    });
+    const data = await res.json();
+    el('kbNote').textContent = `Indexed ${data.indexed_chunks} chunk(s) from ${data.source}.`;
+    el('kbText').value = '';
+  } catch (e) {
+    el('kbNote').textContent = 'Failed: ' + e.message;
+  } finally {
+    el('kbAdd').disabled = false;
+  }
+};
+
+(async () => {
+  try {
+    const health = await (await fetch('/api/health')).json();
+    el('providers').textContent =
+      `stt:${health.providers.stt} · llm:${health.providers.llm} · tts:${health.providers.tts}`;
+    const agents = await (await fetch('/api/agents')).json();
+    el('agent').innerHTML = agents.map(a => `<option value="${a.key}">${a.key}</option>`).join('');
+  } catch (_) {}
+  line('sys', 'Press "Start call" and speak. The agent listens, thinks and replies — interrupt it any time.');
+})();
+</script>
+</body>
+</html>
