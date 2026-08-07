@@ -16,6 +16,10 @@ dependencies = [
     "sqlalchemy>=2.0",
     "aiosqlite>=0.20",
     "numpy>=1.26",
+    # audioop left the stdlib in 3.13, and vaani.audio.resample needs it for the
+    # G.711 telephony codecs. requires-python allows 3.13, so without this the
+    # package installs there and then fails at import.
+    "audioop-lts>=0.2; python_version >= '3.13'",
 ]
 
 [project.optional-dependencies]
@@ -30,6 +34,11 @@ rag = [
     "qdrant-client>=1.12",
     "sentence-transformers>=3.3",
     "pypdf>=5.1",
+]
+# Hosted model providers. Opt-in: an on-premise deployment never installs these,
+# which is a useful hard guarantee that nothing can call out.
+cloud = [
+    "anthropic>=0.40",
 ]
 # Production data plane.
 prod = [
@@ -61,6 +70,22 @@ vaani = ["web/static/*"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# Skill templates and hook scripts are tooling, not application source.
+extend-exclude = [".claude"]
+
+# Pinned explicitly on purpose. Ruff's implicit default rule set widens between
+# releases, so with only `>=0.8` in the dev pin and no select here, a fresh
+# install silently changes what counts as a lint error.
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "RUF"]
+ignore = [
+    # FastAPI's entire dependency-injection idiom is a call in an argument
+    # default: Body(...), File(...), Depends(...).
+    "B008",
+    # This is a multilingual platform: the Devanagari danda (।) and Arabic full
+    # stop (۔) are sentence terminators we segment on, not confusable typos.
+    "RUF001",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -27,7 +27,7 @@ def resample_pcm16(pcm: bytes, src_rate: int, dst_rate: int) -> bytes:
     samples = np.frombuffer(pcm, dtype=np.int16)
     if samples.size == 0:
         return b""
-    out_len = int(round(samples.size * dst_rate / src_rate))
+    out_len = round(samples.size * dst_rate / src_rate)
     if out_len <= 0:
         return b""
     src_idx = np.linspace(0, samples.size - 1, num=out_len, dtype=np.float64)

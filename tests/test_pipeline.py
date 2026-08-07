@@ -20,12 +20,10 @@ from vaani.agent.tools.base import ToolContext
 from vaani.agent.tools.builtin import registry as tools
 from vaani.audio.resample import resample_pcm16, ulaw_to_pcm16
 from vaani.audio.vad import BargeInDetector, EnergyVAD, TurnDetector
-from vaani.config import FRAME_BYTES, FRAME_SAMPLES, SAMPLE_RATE, Settings
+from vaani.config import FRAME_BYTES, SAMPLE_RATE, Settings
 from vaani.core.registry import build_services
 from vaani.pipeline.session import CallSession, CallState
-from vaani.providers.llm.mock import MockLLM
 from vaani.rag.chunking import chunk_text
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -74,8 +72,12 @@ def settings() -> Settings:
         embedding_provider="hash",
         record_calls=False,
         end_of_turn_silence_ms=200,
-        idle_prompt_after_s=999,
-        idle_hangup_after_s=999,
+        # The ceilings Settings allows. The suite finishes in about a second, so
+        # these mean "never fires" without exceeding the bounds the admin UI
+        # enforces — a test that needs an out-of-range value is testing a
+        # configuration no operator can actually produce.
+        idle_prompt_after_s=120,
+        idle_hangup_after_s=600,
     )
 
 
@@ -229,7 +231,7 @@ async def test_unknown_tool_is_reported_not_raised(services):
 
 
 async def test_tool_requiring_verification_is_refused_until_verified(services):
-    from vaani.agent.tools.base import Tool, ToolRegistry, ToolResult
+    from vaani.agent.tools.base import Tool, ToolRegistry
 
     registry = ToolRegistry()
     registry.register(

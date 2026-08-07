@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import itertools
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 from vaani.config import SAMPLE_RATE, SAMPLE_WIDTH
 from vaani.providers.base import Transcript
@@ -38,7 +38,9 @@ class MockSTT:
         duration = len(pcm) / (SAMPLE_RATE * SAMPLE_WIDTH)
         # Silence in, silence out: keeps the turn machine honest under test.
         if duration < 0.15:
-            return Transcript(text="", is_final=True, language=language or "en", duration_s=duration)
+            return Transcript(
+                text="", is_final=True, language=language or "en", duration_s=duration
+            )
         await asyncio.sleep(0.05)  # stand in for inference latency
         return Transcript(
             text=next(self._cycle),

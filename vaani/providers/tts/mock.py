@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import math
 import struct
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 from vaani.config import FRAME_SAMPLES, SAMPLE_RATE
 

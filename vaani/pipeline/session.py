@@ -157,6 +157,11 @@ class CallSession:
         self._partial = bytearray()
         self._speaking_task: asyncio.Task[None] | None = None
         self._turn_task: asyncio.Task[None] | None = None
+        # The event loop only holds a weak reference to a running task, so a
+        # fire-and-forget state emit can be garbage collected before it is ever
+        # sent — the console then silently misses a state change. Holding the
+        # reference until it completes is what makes the emit reliable.
+        self._emits: set[asyncio.Task[None]] = set()
         self._done = asyncio.Event()
         self._last_caller_audio = time.monotonic()
         self._idle_prompted = False
@@ -510,6 +515,13 @@ class CallSession:
             self._turn_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._turn_task
+        # Give the final state emit a moment to land, then drop it. Bounded
+        # rather than awaited outright: a transport that has gone away without
+        # erroring would otherwise hold the call open here forever.
+        if self._emits:
+            _, pending = await asyncio.wait(set(self._emits), timeout=1.0)
+            for task in pending:
+                task.cancel()
         self.record.ended_at = time.time()
         if self.record.outcome == "in_progress":
             self.record.outcome = "completed"
@@ -557,7 +569,9 @@ class CallSession:
         if state == self.state:
             return
         self.state = state
-        asyncio.create_task(self._emit_state())
+        task = asyncio.create_task(self._emit_state())
+        self._emits.add(task)
+        task.add_done_callback(self._emits.discard)
 
     async def _emit_state(self) -> None:
         with contextlib.suppress(Exception):

@@ -10,7 +10,8 @@ from __future__ import annotations
 import asyncio
 import re
 import uuid
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 from vaani.providers.base import Completion, Message, ToolCall
 
@@ -56,7 +57,10 @@ class MockLLM:
         if (
             not already_searched
             and "search_knowledge" in tool_names
-            and re.search(r"\b(bill|due|date|fee|rate|how|what|when|where|policy|document)\b", last_user)
+            and re.search(
+                r"\b(bill|due|date|fee|rate|how|what|when|where|policy|document)\b",
+                last_user,
+            )
         ):
             return Completion(
                 text="",
@@ -75,7 +79,9 @@ class MockLLM:
             if evidence.strip() and "no relevant" not in evidence.lower():
                 return Completion(text=_speakable(evidence))
             return Completion(
-                text="I could not find that in my knowledge base. Shall I connect you to an officer?"
+                text=(
+                    "I could not find that in my knowledge base. Shall I connect you to an officer?"
+                )
             )
 
         for pattern, reply in _RULES:

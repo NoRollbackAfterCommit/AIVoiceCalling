@@ -157,7 +157,10 @@ class ConversationAgent:
 
         # Iteration budget exhausted: the model is looping on tools. Say
         # something rather than leaving the caller in silence.
-        log.warning("tool iteration limit reached", extra={"limit": self._profile.max_tool_iterations})
+        log.warning(
+            "tool iteration limit reached",
+            extra={"limit": self._profile.max_tool_iterations},
+        )
         fallback = (
             "I am sorry, I am having trouble completing that. "
             "Let me connect you to a colleague who can help."

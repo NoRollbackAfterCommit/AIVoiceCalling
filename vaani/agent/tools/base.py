@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from vaani.core.logging import get_logger
 
@@ -146,7 +147,7 @@ class ToolRegistry:
             result = await asyncio.wait_for(
                 _call(tool.fn, arguments, ctx), timeout=tool.timeout_s
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             log.warning("tool timeout", extra={"tool": name, "timeout_s": tool.timeout_s})
             return ToolResult(
                 content="That system did not respond in time. Tell the caller you will "

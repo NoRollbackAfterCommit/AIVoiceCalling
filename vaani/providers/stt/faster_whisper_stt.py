@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 import numpy as np
 
@@ -66,7 +67,8 @@ class FasterWhisperSTT:
             compute = "float16" if device == "cuda" else "int8"
 
         log.info(
-            "loading whisper", extra={"model": self._model_name, "device": device, "compute": compute}
+            "loading whisper",
+            extra={"model": self._model_name, "device": device, "compute": compute},
         )
         started = time.monotonic()
         self._model = await asyncio.to_thread(

@@ -206,7 +206,9 @@ async def search_knowledge(
 
 
 @router.delete("/knowledge/source/{source}", tags=["knowledge"])
-async def delete_source(source: str, request: Request, agent_key: str = "default") -> dict[str, Any]:
+async def delete_source(
+    source: str, request: Request, agent_key: str = "default"
+) -> dict[str, Any]:
     removed = await request.app.state.services.retriever.delete_source(
         source, agent_key=agent_key
     )
@@ -230,7 +232,9 @@ async def live_calls(request: Request) -> list[dict[str, Any]]:
 
 
 @router.get("/calls", tags=["calls"])
-async def call_history(request: Request, limit: int = Query(50, ge=1, le=500)) -> list[dict[str, Any]]:
+async def call_history(
+    request: Request, limit: int = Query(50, ge=1, le=500)
+) -> list[dict[str, Any]]:
     return request.app.state.calls.history(limit)
 
 

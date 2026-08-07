@@ -13,8 +13,9 @@ emits at its own sample rate (usually 22050); we resample to the pipeline's
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any
 
 import numpy as np
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import random
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from vaani.agent.tools.base import ToolContext, ToolRegistry, ToolResult
 
@@ -215,7 +215,7 @@ async def check_bill(consumer_number: str, ctx: ToolContext) -> ToolResult:
     # Deterministic from the number so a demo repeats consistently.
     seed = int(consumer[-6:] or 0)
     amount = 500 + (seed % 9500)
-    due = datetime.now(timezone.utc) + timedelta(days=7 + seed % 14)
+    due = datetime.now(UTC) + timedelta(days=7 + seed % 14)
     return ToolResult(
         content=(
             f"Consumer {consumer}: amount due {amount} rupees, "

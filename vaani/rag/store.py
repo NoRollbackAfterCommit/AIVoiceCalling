@@ -59,7 +59,7 @@ class MemoryVectorStore:
         self, chunks: list[Chunk], vectors: list[list[float]], namespace: str
     ) -> int:
         bucket = self._data.setdefault(namespace, [])
-        bucket.extend(zip(vectors, chunks))
+        bucket.extend(zip(vectors, chunks, strict=True))
         return len(chunks)
 
     async def search(
@@ -92,7 +92,7 @@ class MemoryVectorStore:
 
 def _cosine(a: list[float], b: list[float]) -> float:
     dot = na = nb = 0.0
-    for x, y in zip(a, b):
+    for x, y in zip(a, b, strict=True):
         dot += x * y
         na += x * x
         nb += y * y
@@ -162,7 +162,7 @@ class QdrantVectorStore:
                     **chunk.metadata,
                 },
             )
-            for chunk, vec in zip(chunks, vectors)
+            for chunk, vec in zip(chunks, vectors, strict=True)
         ]
         # Batched: a large circular sent as one request will time out.
         for start in range(0, len(points), 256):

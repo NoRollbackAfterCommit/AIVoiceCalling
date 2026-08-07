@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "deny": [
+      "Edit(.env)",
+      "Edit(./.env)",
+      "Edit(.env.local)"
+    ],
+    "allow": [
+      "Bash(.venv/Scripts/python.exe -m pytest:*)",
+      "Bash(.venv/Scripts/python.exe -m ruff:*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.venv/Scripts/python.exe\" \"$CLAUDE_PROJECT_DIR/.claude/hooks/ruff_fix.py\"",
+            "timeout": 45,
+            "statusMessage": "ruff"
+          }
+        ]
+      }
+    ]
+  }
+}
