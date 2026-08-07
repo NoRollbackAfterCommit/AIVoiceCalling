@@ -39,6 +39,7 @@ from vaani.audio.vad import BargeInDetector, TurnDetector, iter_frames
 from vaani.config import FRAME_BYTES, SAMPLE_RATE, Settings
 from vaani.core.logging import call_id_var, get_logger
 from vaani.core.registry import Services
+from vaani.pipeline.language import LanguageTracker
 
 log = get_logger(__name__)
 
@@ -81,6 +82,8 @@ class CallRecord:
     turns: list[dict[str, Any]] = field(default_factory=list)
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     languages: set[str] = field(default_factory=set)
+    # The language the agent settled on, as opposed to every one detected.
+    language: str | None = None
     outcome: str = "in_progress"
     summary: str = ""
 
@@ -143,6 +146,14 @@ class CallSession:
             llm=services.llm,
             tools=services.tools,
             ctx=self._tool_ctx,
+        )
+
+        # Keyed off voices, not profile.languages: the latter is prose for the
+        # prompt ("Hindi, English"), while the tracker needs BCP-47 codes that
+        # match what STT reports. The first configured voice is the default.
+        self._language = LanguageTracker(
+            default=next(iter(self._profile.voices), "hi-IN"),
+            voices=self._profile.voices,
         )
 
         self._turns = TurnDetector(
@@ -323,6 +334,11 @@ class CallSession:
             self.record.languages.add(transcript.language)
             self._tool_ctx.language = transcript.language
 
+        # Hysteresis lives in the tracker: one mis-detected utterance must not
+        # flip the agent's voice mid-call.
+        self._language.observe(transcript.language)
+        self.record.language = self._language.current
+
         log.info(
             "caller",
             extra={"text": transcript.text, "lang": transcript.language,
@@ -416,8 +432,9 @@ class CallSession:
             sent_s = 0.0
             try:
                 first = True
+                voice = self._language.voice() or self._profile.voice
                 async for chunk in self._services.tts.stream(
-                    text, voice=self._profile.voice
+                    text, voice=voice
                 ):
                     if not chunk:
                         continue

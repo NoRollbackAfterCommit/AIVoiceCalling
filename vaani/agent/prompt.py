@@ -40,6 +40,9 @@ class AgentProfile:
         ]
     )
     voice: str | None = None
+    # Per-language voice, written as language:speaker. Behaviour is data, so a
+    # deployment adds a language by editing this record, not the pipeline.
+    voices: dict[str, str] = field(default_factory=dict)
     tools: list[str] = field(default_factory=lambda: ["search_knowledge", "transfer_to_human"])
     max_tool_iterations: int = 4
 
