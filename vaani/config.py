@@ -356,6 +356,13 @@ class Settings(BaseSettings):
         "./data/recordings", group="Storage", label="Recordings directory",
         restart=False,
     )
+    retention_days: int = cfg(
+        365, group="Storage", label="Retain records for (days)", ge=1, le=3650,
+        restart=False,
+        help="How long call records, transcripts and recordings are kept. "
+             "Declared now because a government deployment will be asked; "
+             "automatic deletion arrives with the Postgres migration.",
+    )
     record_calls: bool = cfg(
         True, group="Storage", label="Record calls", restart=False,
         help="Recordings are the audit trail for a government deployment. Confirm "
