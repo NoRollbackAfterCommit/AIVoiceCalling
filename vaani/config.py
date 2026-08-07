@@ -102,12 +102,13 @@ class Settings(BaseSettings):
     redis_url: str | None = cfg(None, group="Service", label="Redis URL")
 
     # ---- speech to text ---------------------------------------------------
-    stt_provider: Literal["mock", "faster_whisper", "openai"] = cfg(
+    stt_provider: Literal["mock", "faster_whisper", "openai", "sarvam"] = cfg(
         "mock", group="Speech to text", label="Provider",
         options=_opts(
             ("mock", "Mock — no model, for development"),
             ("faster_whisper", "Faster-Whisper — self-hosted, offline"),
             ("openai", "OpenAI Whisper API — hosted"),
+            ("sarvam", "Sarvam Saarika — Indian languages, hosted in India"),
         ),
     )
     stt_model: str = cfg(
@@ -129,6 +130,17 @@ class Settings(BaseSettings):
     stt_language: str | None = cfg(
         None, group="Speech to text", label="Force language",
         help="Leave blank to auto-detect the language on every utterance.",
+    )
+    sarvam_api_key: str | None = cfg(
+        None, group="Speech to text", label="Sarvam API key", secret=True,
+        help="One key covers both Saarika speech recognition and Bulbul speech "
+             "synthesis. Sarvam hosts in India, which is what makes it usable on "
+             "a deployment with data residency obligations.",
+        depends_on={"stt_provider": ["sarvam"], "tts_provider": ["sarvam"]},
+    )
+    sarvam_stt_model: str = cfg(
+        "saaras:v3", group="Speech to text", label="Saarika model",
+        depends_on={"stt_provider": ["sarvam"]},
     )
 
     # ---- large language model --------------------------------------------
@@ -220,13 +232,24 @@ class Settings(BaseSettings):
     )
 
     # ---- text to speech ---------------------------------------------------
-    tts_provider: Literal["mock", "piper", "openai"] = cfg(
+    tts_provider: Literal["mock", "piper", "openai", "sarvam"] = cfg(
         "mock", group="Text to speech", label="Provider",
         options=_opts(
             ("mock", "Mock — tone generator, for development"),
             ("piper", "Piper — self-hosted, offline"),
             ("openai", "OpenAI speech — hosted"),
+            ("sarvam", "Sarvam Bulbul — Indian languages, hosted in India"),
         ),
+    )
+    sarvam_tts_model: str = cfg(
+        "bulbul:v3", group="Text to speech", label="Bulbul model",
+        depends_on={"tts_provider": ["sarvam"]},
+    )
+    sarvam_voice: str = cfg(
+        "hi-IN:anushka", group="Text to speech", label="Sarvam voice",
+        help="Written as language:speaker, for example hi-IN:meera or "
+             "bn-IN:anushka. The language half selects pronunciation.",
+        depends_on={"tts_provider": ["sarvam"]},
     )
     tts_voice: str = cfg(
         "en_US-lessac-medium", group="Text to speech", label="Voice",

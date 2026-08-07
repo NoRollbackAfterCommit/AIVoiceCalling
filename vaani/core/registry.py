@@ -43,6 +43,15 @@ def build_stt(s: Settings) -> STTProvider:
             language=s.stt_language,
             timeout_s=s.llm_timeout_s,
         )
+    if s.stt_provider == "sarvam":
+        from vaani.providers.stt.sarvam import SarvamSTT
+
+        return SarvamSTT(
+            api_key=s.sarvam_api_key or "",
+            model=s.sarvam_stt_model,
+            language=s.stt_language,
+            timeout_s=s.llm_timeout_s,
+        )
     from vaani.providers.stt.mock import MockSTT
 
     return MockSTT()
@@ -98,6 +107,15 @@ def build_tts(s: Settings) -> TTSProvider:
             base_url=s.openai_base_url,
             speed=s.tts_speed,
             timeout_s=s.llm_timeout_s,
+        )
+    if s.tts_provider == "sarvam":
+        from vaani.providers.tts.sarvam import SarvamTTS
+
+        return SarvamTTS(
+            api_key=s.sarvam_api_key or "",
+            model=s.sarvam_tts_model,
+            default_voice=s.sarvam_voice,
+            speed=s.tts_speed,
         )
     from vaani.providers.tts.mock import MockTTS
 
@@ -188,7 +206,8 @@ class Services:
             return any(getattr(old, k) != getattr(new, k) for k in keys)
 
         if changed("stt_provider", "stt_model", "stt_device", "stt_compute_type",
-                   "stt_language", "openai_api_key", "openai_base_url"):
+                   "stt_language", "openai_api_key", "openai_base_url",
+                   "sarvam_api_key", "sarvam_stt_model"):
             provider = build_stt(new)
             await provider.start()
             previous, self.stt = self.stt, provider
@@ -206,7 +225,8 @@ class Services:
             rebuilt.append("llm")
 
         if changed("tts_provider", "tts_voice", "tts_voices_dir", "tts_speed",
-                   "tts_model", "openai_api_key", "openai_base_url"):
+                   "tts_model", "openai_api_key", "openai_base_url",
+                   "sarvam_api_key", "sarvam_tts_model", "sarvam_voice"):
             provider = build_tts(new)
             await provider.start()
             previous, self.tts = self.tts, provider
