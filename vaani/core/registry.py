@@ -33,19 +33,43 @@ def build_stt(s: Settings) -> STTProvider:
             compute_type=s.stt_compute_type,
             default_language=s.stt_language,
         )
+    if s.stt_provider == "openai":
+        from vaani.providers.openai_hosted import OpenAISTT
+
+        return OpenAISTT(
+            api_key=s.openai_api_key or "",
+            model=s.stt_model if s.stt_model.startswith(("whisper", "gpt-4o")) else "whisper-1",
+            base_url=s.openai_base_url,
+            language=s.stt_language,
+            timeout_s=s.llm_timeout_s,
+        )
     from vaani.providers.stt.mock import MockSTT
 
     return MockSTT()
 
 
 def build_llm(s: Settings) -> LLMProvider:
-    if s.llm_provider == "openai_compat":
+    if s.llm_provider == "anthropic":
+        from vaani.providers.llm.anthropic_llm import AnthropicLLM
+
+        return AnthropicLLM(
+            api_key=s.anthropic_api_key or "",
+            model=s.anthropic_model,
+            max_tokens=s.llm_max_tokens,
+            temperature=s.llm_temperature,
+            effort=s.anthropic_effort,
+            timeout_s=s.llm_timeout_s,
+        )
+    if s.llm_provider in ("openai", "openai_compat"):
         from vaani.providers.llm.openai_compat import OpenAICompatLLM
 
+        # OpenAI's own API and every self-hosted server speak the same protocol,
+        # so one client covers both; only the endpoint and credential differ.
+        hosted = s.llm_provider == "openai"
         return OpenAICompatLLM(
-            base_url=s.llm_base_url,
-            model=s.llm_model,
-            api_key=s.llm_api_key,
+            base_url=s.openai_base_url if hosted else s.llm_base_url,
+            model=s.openai_model if hosted else s.llm_model,
+            api_key=(s.openai_api_key or "") if hosted else "not-needed",
             temperature=s.llm_temperature,
             max_tokens=s.llm_max_tokens,
             timeout_s=s.llm_timeout_s,
@@ -62,6 +86,19 @@ def build_tts(s: Settings) -> TTSProvider:
         return PiperTTS(
             voices_dir=s.tts_voices_dir, default_voice=s.tts_voice, speed=s.tts_speed
         )
+    if s.tts_provider == "openai":
+        from vaani.providers.openai_hosted import OpenAITTS
+
+        # Piper voice names mean nothing to OpenAI; fall back to a valid one.
+        voice = s.tts_voice if "-" not in s.tts_voice else "alloy"
+        return OpenAITTS(
+            api_key=s.openai_api_key or "",
+            model=s.tts_model,
+            voice=voice,
+            base_url=s.openai_base_url,
+            speed=s.tts_speed,
+            timeout_s=s.llm_timeout_s,
+        )
     from vaani.providers.tts.mock import MockTTS
 
     return MockTTS()
@@ -72,6 +109,16 @@ def build_embedder(s: Settings) -> EmbeddingProvider:
         from vaani.providers.embeddings.providers import SentenceTransformerEmbedding
 
         return SentenceTransformerEmbedding(model=s.embedding_model)
+    if s.embedding_provider == "openai":
+        from vaani.providers.openai_hosted import OpenAIEmbedding
+
+        model = s.embedding_model if "embedding" in s.embedding_model else "text-embedding-3-small"
+        return OpenAIEmbedding(
+            api_key=s.openai_api_key or "",
+            model=model,
+            base_url=s.openai_base_url,
+            timeout_s=s.llm_timeout_s,
+        )
     from vaani.providers.embeddings.providers import HashEmbedding
 
     return HashEmbedding(dim=s.embedding_dim)
@@ -124,6 +171,78 @@ class Services:
                 await provider.close()
             except Exception:
                 log.exception("provider shutdown failed")
+
+    async def reload(self, new: Settings) -> list[str]:
+        """Apply changed settings in place, rebuilding only what they affect.
+
+        Selective rather than wholesale, because the in-memory vector store lives
+        inside the retriever: rebuilding everything to change a TTS voice would
+        silently wipe every document the operator had uploaded. Each provider is
+        started before the old one is swapped out and closed, so a bad API key
+        surfaces as a failed save rather than a platform left with no LLM.
+        """
+        old = self.settings
+        rebuilt: list[str] = []
+
+        def changed(*keys: str) -> bool:
+            return any(getattr(old, k) != getattr(new, k) for k in keys)
+
+        if changed("stt_provider", "stt_model", "stt_device", "stt_compute_type",
+                   "stt_language", "openai_api_key", "openai_base_url"):
+            provider = build_stt(new)
+            await provider.start()
+            previous, self.stt = self.stt, provider
+            await _quiet_close(previous)
+            rebuilt.append("stt")
+
+        if changed("llm_provider", "llm_base_url", "llm_model", "llm_temperature",
+                   "llm_max_tokens", "llm_timeout_s", "anthropic_api_key",
+                   "anthropic_model", "anthropic_effort", "openai_api_key",
+                   "openai_model", "openai_base_url"):
+            provider = build_llm(new)
+            await provider.start()
+            previous, self.llm = self.llm, provider
+            await _quiet_close(previous)
+            rebuilt.append("llm")
+
+        if changed("tts_provider", "tts_voice", "tts_voices_dir", "tts_speed",
+                   "tts_model", "openai_api_key", "openai_base_url"):
+            provider = build_tts(new)
+            await provider.start()
+            previous, self.tts = self.tts, provider
+            await _quiet_close(previous)
+            rebuilt.append("tts")
+
+        if changed("vector_store", "qdrant_url", "qdrant_api_key",
+                   "embedding_provider", "embedding_model", "embedding_dim"):
+            # This one does discard the in-memory index — the vectors are not
+            # portable across embedding models, so there is nothing to carry.
+            retriever = Retriever(
+                store=build_store(new), embedder=build_embedder(new),
+                top_k=new.rag_top_k, min_score=new.rag_min_score,
+            )
+            await retriever.start()
+            self.retriever = retriever
+            rebuilt.append("knowledge")
+            log.warning("knowledge store rebuilt; re-ingest documents if it was in-memory")
+        else:
+            # Cheap knobs that need no rebuild.
+            self.retriever._top_k = new.rag_top_k
+            self.retriever._min_score = min(
+                new.rag_min_score,
+                getattr(self.retriever._embedder, "similarity_floor", new.rag_min_score),
+            )
+
+        self.settings = new
+        log.info("settings applied", extra={"rebuilt": rebuilt})
+        return rebuilt
+
+
+async def _quiet_close(provider: Any) -> None:
+    try:
+        await provider.close()
+    except Exception:
+        log.exception("failed to close replaced provider")
 
 
 def build_services(settings: Settings) -> Services:

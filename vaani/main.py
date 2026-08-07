@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import contextlib
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,17 +13,26 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from vaani.api import routes, ws_voice
+from vaani.api import settings as settings_api
 from vaani.config import Settings, get_settings
 from vaani.core.logging import configure_logging, get_logger
 from vaani.core.registry import build_services
 from vaani.pipeline.manager import CallManager
+from vaani.settings_store import SettingsStore
 
 log = get_logger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    settings: Settings = app.state.settings
+    # The store layers persisted admin-portal overrides on top of the
+    # environment, so what boots is what the operator last saved — not what the
+    # container was originally started with.
+    store = SettingsStore()
+    settings: Settings = store.settings
+    app.state.settings_store = store
+    app.state.settings = settings
+
     services = build_services(settings)
     await services.start()
 
@@ -85,6 +94,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     app.include_router(routes.router, prefix="/api")
+    app.include_router(settings_api.router, prefix="/api")
     app.include_router(ws_voice.router)
 
     static_dir = Path(__file__).parent / "web" / "static"
@@ -94,6 +104,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         @app.get("/", include_in_schema=False)
         async def index() -> FileResponse:
             return FileResponse(str(static_dir / "index.html"))
+
+        @app.get("/settings", include_in_schema=False)
+        async def settings_page() -> FileResponse:
+            return FileResponse(str(static_dir / "settings.html"))
 
     return app
 

@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Vaani — Settings</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --line: #30363d; --sunken: #0d1117;
+    --fg: #e6edf3; --dim: #8b949e;
+    --accent: #2f81f7; --ok: #3fb950; --warn: #d29922; --err: #f85149;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f6f8fa; --panel:#fff; --line:#d8dee4; --sunken:#f6f8fa;
+            --fg:#1f2328; --dim:#656d76; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    position: sticky; top: 0; z-index: 10; background: var(--bg);
+    border-bottom: 1px solid var(--line); padding: 14px 24px;
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  }
+  h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: -.01em; }
+  a { color: var(--accent); text-decoration: none; font-size: 13px; }
+  a:hover { text-decoration: underline; }
+  .spacer { flex: 1; }
+  main { max-width: 900px; margin: 0 auto; padding: 20px 24px 80px; }
+  .group {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; margin-bottom: 18px; overflow: hidden;
+  }
+  .group > h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--dim); margin: 0; padding: 13px 18px;
+    border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .field {
+    padding: 14px 18px; border-bottom: 1px solid var(--line);
+    display: grid; grid-template-columns: 260px 1fr; gap: 18px; align-items: start;
+  }
+  .field:last-child { border-bottom: 0; }
+  @media (max-width: 700px) { .field { grid-template-columns: 1fr; gap: 8px; } }
+  .field.hidden { display: none; }
+  label { font-weight: 550; font-size: 14px; }
+  .help { font-size: 12.5px; color: var(--dim); margin-top: 3px; }
+  .badge {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
+    border: 1px solid var(--line); color: var(--dim);
+    padding: 1px 6px; border-radius: 999px; margin-left: 6px; vertical-align: 1px;
+  }
+  .badge.set { border-color: var(--accent); color: var(--accent); }
+  input, select {
+    font: inherit; width: 100%; padding: 8px 10px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--sunken); color: var(--fg);
+  }
+  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  input[type=checkbox] { width: auto; }
+  .err { color: var(--err); font-size: 12.5px; margin-top: 4px; }
+  button {
+    font: inherit; font-weight: 600; padding: 9px 16px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--fg);
+    cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.small { padding: 5px 11px; font-size: 12.5px; font-weight: 550; }
+  #toast {
+    position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+    background: var(--panel); border: 1px solid var(--line); border-radius: 9px;
+    padding: 11px 18px; font-size: 14px; box-shadow: 0 8px 30px rgba(0,0,0,.35);
+    opacity: 0; pointer-events: none; transition: opacity .18s; max-width: 90vw;
+  }
+  #toast.show { opacity: 1; }
+  #toast.ok { border-color: var(--ok); }
+  #toast.bad { border-color: var(--err); }
+  .tests { display: flex; gap: 8px; flex-wrap: wrap; padding: 14px 18px; }
+  .result { font-size: 12.5px; color: var(--dim); padding: 0 18px 14px; }
+  .result.ok { color: var(--ok); }
+  .result.bad { color: var(--err); }
+  .note {
+    background: var(--panel); border: 1px solid var(--warn); border-left-width: 3px;
+    border-radius: 8px; padding: 12px 16px; font-size: 13.5px; margin-bottom: 18px;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Settings</h1>
+  <a href="/">← Console</a>
+  <span class="spacer"></span>
+  <span id="dirty" style="font-size:13px;color:var(--dim)"></span>
+  <button class="small" id="reset">Reset to environment</button>
+  <button class="primary" id="save" disabled>Save changes</button>
+</header>
+
+<main>
+  <div class="note">
+    Hosted providers (Claude, OpenAI) send call transcripts and audio to a third
+    party. Confirm that is permitted before enabling one on a government,
+    healthcare, or banking deployment — the self-hosted providers keep every
+    byte inside your network.
+  </div>
+
+  <div class="group">
+    <h2>Connection tests</h2>
+    <div class="tests">
+      <button class="small" data-test="llm">Test language model</button>
+      <button class="small" data-test="stt">Test speech recognition</button>
+      <button class="small" data-test="tts">Test voice</button>
+      <button class="small" data-test="knowledge">Test knowledge base</button>
+    </div>
+    <div class="result" id="testResult">Save your settings first, then test them here.</div>
+  </div>
+
+  <div id="form"></div>
+</main>
+
+<div id="toast"></div>
+
+<script>
+const el = id => document.getElementById(id);
+let schema = [], values = {}, edits = {};
+
+const esc = s => String(s).replace(/[&<>"]/g, c =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function toast(message, kind) {
+  const t = el('toast');
+  t.textContent = message;
+  t.className = 'show ' + (kind || '');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => { t.className = ''; }, 4200);
+}
+
+async function load() {
+  const data = await (await fetch('/api/settings/schema')).json();
+  schema = data.groups;
+  values = data.values;
+  edits = {};
+  render();
+  markDirty();
+}
+
+function render() {
+  el('form').innerHTML = schema.map(group => `
+    <div class="group">
+      <h2>${esc(group.group)}</h2>
+      ${group.fields.map(fieldHtml).join('')}
+    </div>`).join('');
+
+  el('form').querySelectorAll('[data-key]').forEach(input => {
+    input.addEventListener('input', onEdit);
+    input.addEventListener('change', onEdit);
+  });
+  applyVisibility();
+}
+
+function fieldHtml(f) {
+  const value = values[f.key];
+  let control;
+
+  if (f.type === 'select') {
+    const opts = (f.options || []).map(o =>
+      `<option value="${esc(o.value)}"${o.value === value ? ' selected' : ''}>${esc(o.label)}</option>`
+    ).join('');
+    control = `<select data-key="${f.key}" data-type="select">${opts}</select>`;
+  } else if (f.type === 'bool') {
+    control = `<input type="checkbox" data-key="${f.key}" data-type="bool"${value ? ' checked' : ''} />`;
+  } else if (f.type === 'secret') {
+    // Pre-filled with the mask. Leaving it untouched means "keep the stored
+    // key"; the server treats an all-bullets value as no change.
+    control = `<input type="password" data-key="${f.key}" data-type="secret"
+      value="${esc(value || '')}" placeholder="not set"
+      autocomplete="new-password" spellcheck="false" />`;
+  } else {
+    const numeric = f.type === 'int' || f.type === 'float';
+    control = `<input type="${numeric ? 'number' : 'text'}"
+      ${f.type === 'float' ? 'step="any"' : ''}
+      data-key="${f.key}" data-type="${f.type}"
+      value="${esc(value ?? '')}" placeholder="${esc(f.default ?? '')}" />`;
+  }
+
+  return `
+    <div class="field" data-field="${f.key}">
+      <div>
+        <label for="${f.key}">${esc(f.label)}</label>
+        ${f.overridden ? '<span class="badge set">saved</span>' : ''}
+        ${!f.restart ? '<span class="badge">live</span>' : ''}
+        ${f.help ? `<div class="help">${esc(f.help)}</div>` : ''}
+      </div>
+      <div>${control}<div class="err" data-err="${f.key}"></div></div>
+    </div>`;
+}
+
+function onEdit(event) {
+  const input = event.target;
+  const key = input.dataset.key;
+  const type = input.dataset.type;
+  let value;
+
+  if (type === 'bool') value = input.checked;
+  else if (type === 'int') value = input.value === '' ? null : parseInt(input.value, 10);
+  else if (type === 'float') value = input.value === '' ? null : parseFloat(input.value);
+  else value = input.value;
+
+  if (JSON.stringify(value) === JSON.stringify(values[key])) delete edits[key];
+  else edits[key] = value;
+
+  applyVisibility();
+  markDirty();
+}
+
+// Hide fields whose provider isn't selected — an Anthropic key means nothing
+// when the LLM provider is a self-hosted server.
+function applyVisibility() {
+  const current = k => (k in edits ? edits[k] : values[k]);
+  schema.forEach(group => group.fields.forEach(f => {
+    const row = document.querySelector(`[data-field="${f.key}"]`);
+    if (!row) return;
+    let visible = true;
+    if (f.depends_on) {
+      visible = Object.entries(f.depends_on)
+        .some(([dep, allowed]) => allowed.includes(current(dep)));
+    }
+    row.classList.toggle('hidden', !visible);
+  }));
+}
+
+function markDirty() {
+  const count = Object.keys(edits).length;
+  el('save').disabled = count === 0;
+  el('dirty').textContent = count ? `${count} unsaved change${count > 1 ? 's' : ''}` : '';
+}
+
+el('save').onclick = async () => {
+  document.querySelectorAll('[data-err]').forEach(e => (e.textContent = ''));
+  el('save').disabled = true;
+
+  let res = await fetch('/api/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(edits),
+  });
+
+  if (res.status === 409) {
+    const body = await res.json();
+    if (!confirm(body.detail + '\n\nApply anyway?')) { markDirty(); return; }
+    res = await fetch('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...edits, _force: true }),
+    });
+  }
+
+  const body = await res.json().catch(() => ({}));
+
+  if (!res.ok) {
+    const detail = body.detail || {};
+    const errors = detail.errors || {};
+    Object.entries(errors).forEach(([key, message]) => {
+      const slot = document.querySelector(`[data-err="${key}"]`);
+      if (slot) slot.textContent = message;
+    });
+    toast(detail.message || 'Could not save settings', 'bad');
+    markDirty();
+    return;
+  }
+
+  const rebuilt = body.rebuilt || [];
+  toast(
+    `Saved ${body.changed.length} setting(s)` +
+    (rebuilt.length ? ` · reloaded ${rebuilt.join(', ')}` : ''),
+    'ok'
+  );
+  await load();
+};
+
+el('reset').onclick = async () => {
+  if (!confirm('Discard all saved overrides and fall back to the environment configuration?')) return;
+  const res = await fetch('/api/settings/reset', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ keys: null }),
+  });
+  const body = await res.json();
+  toast(`Reset ${body.reset.length} setting(s)`, 'ok');
+  await load();
+};
+
+document.querySelectorAll('[data-test]').forEach(button => {
+  button.onclick = async () => {
+    const target = button.dataset.test;
+    const slot = el('testResult');
+    slot.className = 'result';
+    slot.textContent = `Testing ${target}…`;
+    button.disabled = true;
+    try {
+      const res = await fetch('/api/settings/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target }),
+      });
+      const body = await res.json();
+      slot.className = 'result ' + (body.ok ? 'ok' : 'bad');
+      slot.textContent = body.ok
+        ? `✓ ${target} responded in ${body.latency_ms} ms — ${body.detail}`
+        : `✗ ${target}: ${body.error}`;
+    } catch (e) {
+      slot.className = 'result bad';
+      slot.textContent = `✗ ${target}: ${e.message}`;
+    } finally {
+      button.disabled = false;
+    }
+  };
+});
+
+window.addEventListener('beforeunload', e => {
+  if (Object.keys(edits).length) { e.preventDefault(); e.returnValue = ''; }
+});
+
+load().catch(e => toast('Could not load settings: ' + e.message, 'bad'));
+</script>
+</body>
+</html>
