@@ -18,6 +18,7 @@ knowledge/*
 
 .pytest_cache/
 .ruff_cache/
+.playwright-mcp/
 .coverage
 htmlcov/
 

@@ -98,6 +98,9 @@ class Retriever:
     async def count(self, agent_key: str | None = None) -> int:
         return await self._store.count(agent_key)
 
+    async def sources(self, *, agent_key: str = "default") -> list[tuple[str, int]]:
+        return await self._store.sources(agent_key)
+
     # -- read ---------------------------------------------------------------
 
     async def search(

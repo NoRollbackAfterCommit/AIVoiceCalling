@@ -215,6 +215,13 @@ async def delete_source(
     return {"source": source, "removed_chunks": removed}
 
 
+@router.get("/knowledge/sources", tags=["knowledge"])
+async def knowledge_sources(request: Request, agent_key: str = "default") -> list[dict[str, Any]]:
+    """What is actually indexed, so an operator is not uploading blind."""
+    pairs = await request.app.state.services.retriever.sources(agent_key=agent_key)
+    return [{"source": source, "chunks": chunks} for source, chunks in pairs]
+
+
 @router.get("/knowledge/stats", tags=["knowledge"])
 async def knowledge_stats(request: Request, agent_key: str | None = None) -> dict[str, Any]:
     count = await request.app.state.services.retriever.count(agent_key)

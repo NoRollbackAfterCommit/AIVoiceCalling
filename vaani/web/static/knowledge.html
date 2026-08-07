@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Vaani — Knowledge</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --line: #30363d; --sunken: #0d1117;
+    --fg: #e6edf3; --dim: #8b949e;
+    --accent: #2f81f7; --ok: #3fb950; --warn: #d29922; --err: #f85149;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f6f8fa; --panel:#fff; --line:#d8dee4; --sunken:#f6f8fa;
+            --fg:#1f2328; --dim:#656d76; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    position: sticky; top: 0; z-index: 10; background: var(--bg);
+    border-bottom: 1px solid var(--line); padding: 14px 24px;
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  }
+  h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: -.01em; }
+  a { color: var(--accent); text-decoration: none; font-size: 13px; }
+  a:hover { text-decoration: underline; }
+  .spacer { flex: 1; }
+  main { max-width: 900px; margin: 0 auto; padding: 20px 24px 80px; }
+  .group {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; margin-bottom: 18px; overflow: hidden;
+  }
+  .group > h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--dim); margin: 0; padding: 13px 18px;
+    border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .body { padding: 14px 18px; }
+  .help { font-size: 12.5px; color: var(--dim); margin-top: 3px; }
+  label { font-weight: 550; font-size: 14px; }
+  input, select, textarea {
+    font: inherit; width: 100%; padding: 8px 10px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--sunken); color: var(--fg);
+  }
+  textarea { min-height: 130px; resize: vertical; line-height: 1.5; }
+  input:focus, select:focus, textarea:focus {
+    outline: 2px solid var(--accent); outline-offset: -1px;
+  }
+  button {
+    font: inherit; font-weight: 600; padding: 9px 16px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--fg);
+    cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.small { padding: 5px 11px; font-size: 12.5px; font-weight: 550; }
+  button.danger { color: var(--err); border-color: var(--line); }
+  button.danger:hover:not(:disabled) { border-color: var(--err); }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .row + .row { margin-top: 12px; }
+  .grow { flex: 1; min-width: 180px; }
+
+  /* Drop zone */
+  #drop {
+    border: 1.5px dashed var(--line); border-radius: 9px; padding: 26px 18px;
+    text-align: center; color: var(--dim); font-size: 14px; cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  #drop:hover, #drop.over { border-color: var(--accent); background: var(--sunken); }
+  #drop strong { color: var(--fg); font-weight: 600; }
+
+  /* Source table */
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 10px 18px; border-bottom: 1px solid var(--line); }
+  th {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--dim); font-weight: 600;
+  }
+  tr:last-child td { border-bottom: 0; }
+  td.num { font-variant-numeric: tabular-nums; color: var(--dim); width: 90px; }
+  td.act { width: 90px; text-align: right; }
+  .src { font-weight: 550; word-break: break-all; }
+  .empty { padding: 22px 18px; color: var(--dim); font-size: 14px; }
+
+  /* Retrieval preview */
+  .hit {
+    border: 1px solid var(--line); border-radius: 8px; padding: 11px 13px;
+    margin-top: 10px; background: var(--sunken); font-size: 13.5px;
+  }
+  .hit .meta {
+    font-size: 11.5px; color: var(--dim); margin-bottom: 5px;
+    display: flex; gap: 10px; font-variant-numeric: tabular-nums;
+  }
+  .score { color: var(--ok); font-weight: 600; }
+  .score.low { color: var(--warn); }
+
+  #toast {
+    position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+    background: var(--panel); border: 1px solid var(--line); border-radius: 9px;
+    padding: 11px 18px; font-size: 14px; box-shadow: 0 8px 30px rgba(0,0,0,.35);
+    opacity: 0; pointer-events: none; transition: opacity .18s; max-width: 90vw;
+  }
+  #toast.show { opacity: 1; }
+  #toast.ok { border-color: var(--ok); }
+  #toast.bad { border-color: var(--err); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Knowledge</h1>
+  <a href="/">← Console</a>
+  <a href="/settings">Settings</a>
+  <span class="spacer"></span>
+  <label for="agent" style="font-size:13px;color:var(--dim);font-weight:400">Agent</label>
+  <select id="agent" style="width:auto;min-width:150px"></select>
+</header>
+
+<main>
+  <div class="group">
+    <h2>Upload documents</h2>
+    <div class="body">
+      <div id="drop">
+        <strong>Drop files here</strong> or click to choose<br />
+        <span class="help">PDF, DOCX, TXT, MD, HTML, CSV, JSON — up to 64 MB each</span>
+      </div>
+      <input type="file" id="file" multiple hidden
+             accept=".pdf,.docx,.txt,.md,.html,.htm,.csv,.json" />
+      <div id="uploads" style="margin-top:12px"></div>
+    </div>
+  </div>
+
+  <div class="group">
+    <h2>Add text directly</h2>
+    <div class="body">
+      <div class="row">
+        <div class="grow">
+          <label for="src">Source name</label>
+          <input id="src" placeholder="e.g. property-tax-policy" />
+          <div class="help">How this appears in the source list, and what you delete it by.</div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="grow">
+          <label for="text">Text</label>
+          <textarea id="text" placeholder="Paste policy text, FAQs, circulars…"></textarea>
+        </div>
+      </div>
+      <div class="row">
+        <button class="primary" id="addText" disabled>Add to knowledge base</button>
+        <span class="help" id="textHint"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="group">
+    <h2>Indexed sources <span id="total" style="color:var(--dim)"></span></h2>
+    <div id="sources"><div class="empty">Loading…</div></div>
+  </div>
+
+  <div class="group">
+    <h2>Test retrieval</h2>
+    <div class="body">
+      <div class="row">
+        <input class="grow" id="q"
+               placeholder="Ask what a caller would ask…" />
+        <button id="search">Search</button>
+      </div>
+      <div class="help" style="margin-top:8px">
+        What the agent would retrieve for this question. The fastest way to diagnose
+        a wrong answer without placing a call.
+      </div>
+      <div id="hits"></div>
+    </div>
+  </div>
+</main>
+
+<div id="toast"></div>
+
+<script>
+const el = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+let agentKey = 'default';
+
+function toast(msg, kind) {
+  const t = el('toast');
+  t.textContent = msg;
+  t.className = 'show ' + (kind || '');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => { t.className = ''; }, 3200);
+}
+
+async function loadAgents() {
+  try {
+    const agents = await (await fetch('/api/agents')).json();
+    const keys = Array.isArray(agents)
+      ? agents.map(a => a.key || a).filter(Boolean)
+      : Object.keys(agents || {});
+    const list = keys.length ? keys : ['default'];
+    el('agent').innerHTML = list.map(k =>
+      `<option value="${esc(k)}">${esc(k)}</option>`).join('');
+  } catch {
+    el('agent').innerHTML = '<option value="default">default</option>';
+  }
+  agentKey = el('agent').value || 'default';
+}
+
+// -- sources ---------------------------------------------------------------
+
+async function loadSources() {
+  const box = el('sources');
+  try {
+    const rows = await (await fetch(
+      `/api/knowledge/sources?agent_key=${encodeURIComponent(agentKey)}`)).json();
+    if (!rows.length) {
+      box.innerHTML = '<div class="empty">Nothing indexed yet. '
+        + 'Upload a document or paste text above.</div>';
+      el('total').textContent = '';
+      return;
+    }
+    const chunks = rows.reduce((n, r) => n + r.chunks, 0);
+    el('total').textContent = `· ${rows.length} source${rows.length > 1 ? 's' : ''}, `
+      + `${chunks} chunk${chunks > 1 ? 's' : ''}`;
+    box.innerHTML = `<table><thead><tr>
+        <th>Source</th><th>Chunks</th><th></th>
+      </tr></thead><tbody>${rows.map(r => `
+        <tr>
+          <td class="src">${esc(r.source)}</td>
+          <td class="num">${r.chunks}</td>
+          <td class="act">
+            <button class="small danger" data-del="${esc(r.source)}">Delete</button>
+          </td>
+        </tr>`).join('')}</tbody></table>`;
+  } catch (e) {
+    box.innerHTML = `<div class="empty">Could not load sources: ${esc(e.message)}</div>`;
+  }
+}
+
+el('sources').addEventListener('click', async ev => {
+  const source = ev.target.dataset && ev.target.dataset.del;
+  if (!source) return;
+  if (!confirm(`Delete "${source}" from the knowledge base?\n\n`
+             + `The agent will immediately stop answering from it.`)) return;
+  ev.target.disabled = true;
+  try {
+    const res = await fetch(
+      `/api/knowledge/source/${encodeURIComponent(source)}`
+      + `?agent_key=${encodeURIComponent(agentKey)}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error(await res.text());
+    const out = await res.json();
+    // Qdrant reports -1: it does not return a delete count.
+    toast(out.removed_chunks >= 0
+      ? `Removed ${out.removed_chunks} chunks from ${source}`
+      : `Removed ${source}`, 'ok');
+    await loadSources();
+  } catch (e) {
+    toast('Delete failed: ' + e.message, 'bad');
+    ev.target.disabled = false;
+  }
+});
+
+// -- upload ----------------------------------------------------------------
+
+const drop = el('drop');
+drop.addEventListener('click', () => el('file').click());
+drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+drop.addEventListener('drop', e => {
+  e.preventDefault();
+  drop.classList.remove('over');
+  if (e.dataTransfer.files.length) upload(e.dataTransfer.files);
+});
+el('file').addEventListener('change', e => {
+  if (e.target.files.length) upload(e.target.files);
+  e.target.value = '';
+});
+
+async function upload(files) {
+  const log = el('uploads');
+  for (const file of files) {
+    const line = document.createElement('div');
+    line.className = 'help';
+    line.textContent = `${file.name} — uploading…`;
+    log.appendChild(line);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const res = await fetch(
+        `/api/knowledge/upload?agent_key=${encodeURIComponent(agentKey)}`,
+        { method: 'POST', body: form });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(out.detail || res.statusText);
+      if (out.indexed_chunks === 0) {
+        // Almost always a scanned PDF: extraction produced nothing usable.
+        line.innerHTML = `${esc(file.name)} — <span style="color:var(--warn)">`
+          + `no text extracted.</span> If this is a scanned document it needs OCR.`;
+      } else {
+        line.innerHTML = `${esc(file.name)} — <span style="color:var(--ok)">`
+          + `${out.indexed_chunks} chunks indexed</span>`;
+      }
+    } catch (e) {
+      line.innerHTML = `${esc(file.name)} — `
+        + `<span style="color:var(--err)">${esc(e.message)}</span>`;
+    }
+  }
+  await loadSources();
+}
+
+// -- add text --------------------------------------------------------------
+
+function syncTextButton() {
+  const ok = el('src').value.trim() && el('text').value.trim();
+  el('addText').disabled = !ok;
+  el('textHint').textContent = ok ? '' : 'A source name and some text are both required.';
+}
+el('src').addEventListener('input', syncTextButton);
+el('text').addEventListener('input', syncTextButton);
+
+el('addText').addEventListener('click', async () => {
+  const btn = el('addText');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/knowledge/text', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: el('text').value,
+        source: el('src').value.trim(),
+        agent_key: agentKey,
+      }),
+    });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(out.detail || res.statusText);
+    if (out.indexed_chunks === 0) {
+      toast('Nothing indexed — the text was too short to be a usable chunk.', 'bad');
+    } else {
+      toast(`Indexed ${out.indexed_chunks} chunks as "${out.source}"`, 'ok');
+      el('text').value = '';
+    }
+    await loadSources();
+  } catch (e) {
+    toast('Failed: ' + e.message, 'bad');
+  }
+  syncTextButton();
+});
+
+// -- retrieval preview -----------------------------------------------------
+
+async function runSearch() {
+  const q = el('q').value.trim();
+  if (!q) return;
+  const box = el('hits');
+  box.innerHTML = '<div class="help" style="margin-top:10px">Searching…</div>';
+  try {
+    const out = await (await fetch(
+      `/api/knowledge/search?q=${encodeURIComponent(q)}`
+      + `&agent_key=${encodeURIComponent(agentKey)}`)).json();
+    if (!out.hits.length) {
+      box.innerHTML = '<div class="help" style="margin-top:10px">'
+        + 'No passage cleared the relevance threshold. The agent would say it does '
+        + 'not have that information and offer to transfer.</div>';
+      return;
+    }
+    box.innerHTML = out.hits.map(h => `
+      <div class="hit">
+        <div class="meta">
+          <span class="score${h.score < 0.4 ? ' low' : ''}">${h.score.toFixed(3)}</span>
+          <span>${esc(h.source)}</span>
+        </div>
+        ${esc(h.text)}
+      </div>`).join('');
+  } catch (e) {
+    box.innerHTML = `<div class="help" style="margin-top:10px">Search failed: `
+      + `${esc(e.message)}</div>`;
+  }
+}
+el('search').addEventListener('click', runSearch);
+el('q').addEventListener('keydown', e => { if (e.key === 'Enter') runSearch(); });
+
+el('agent').addEventListener('change', () => {
+  agentKey = el('agent').value;
+  el('hits').innerHTML = '';
+  loadSources();
+});
+
+(async function init() {
+  await loadAgents();
+  syncTextButton();
+  await loadSources();
+})();
+</script>
+</body>
+</html>

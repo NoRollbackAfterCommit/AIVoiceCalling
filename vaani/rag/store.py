@@ -40,6 +40,7 @@ class VectorStore(Protocol):
                      min_score: float) -> list[SearchHit]: ...
     async def delete_source(self, source: str, namespace: str) -> int: ...
     async def count(self, namespace: str | None = None) -> int: ...
+    async def sources(self, namespace: str) -> list[tuple[str, int]]: ...
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +89,12 @@ class MemoryVectorStore:
         if namespace is not None:
             return len(self._data.get(namespace, []))
         return sum(len(b) for b in self._data.values())
+
+    async def sources(self, namespace: str) -> list[tuple[str, int]]:
+        counts: dict[str, int] = {}
+        for _, chunk in self._data.get(namespace, []):
+            counts[chunk.source] = counts.get(chunk.source, 0) + 1
+        return sorted(counts.items())
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
@@ -222,3 +229,31 @@ class QdrantVectorStore:
             )
         result = await self._client.count(collection_name=self._collection, count_filter=flt)
         return result.count
+
+    async def sources(self, namespace: str) -> list[tuple[str, int]]:
+        """Enumerate indexed sources and their chunk counts.
+
+        Qdrant has no group-by, so this pages the payloads. Vectors are excluded
+        and only the source field is fetched — it is an admin-screen query, not
+        something on the call path.
+        """
+        from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+        flt = Filter(must=[FieldCondition(key="namespace", match=MatchValue(value=namespace))])
+        counts: dict[str, int] = {}
+        offset: Any = None
+        while True:
+            points, offset = await self._client.scroll(
+                collection_name=self._collection,
+                scroll_filter=flt,
+                limit=256,
+                offset=offset,
+                with_payload=["source"],
+                with_vectors=False,
+            )
+            for point in points:
+                source = (point.payload or {}).get("source", "unknown")
+                counts[source] = counts.get(source, 0) + 1
+            if offset is None:
+                break
+        return sorted(counts.items())
