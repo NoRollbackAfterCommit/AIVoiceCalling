@@ -157,6 +157,8 @@ class Services:
     retriever: Retriever
     tools: ToolRegistry
     profiles: dict[str, AgentProfile]
+    # Optional so a bare install still places calls with nothing persisted.
+    calls: Any = None
 
     def profile(self, key: str) -> AgentProfile:
         return self.profiles.get(key) or self.profiles["default"]

@@ -17,6 +17,7 @@ from vaani.api import settings as settings_api
 from vaani.config import Settings, get_settings
 from vaani.core.logging import configure_logging, get_logger
 from vaani.core.registry import build_services
+from vaani.db.repository import CallRepository
 from vaani.pipeline.manager import CallManager
 from vaani.settings_store import SettingsStore
 
@@ -34,6 +35,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.settings = settings
 
     services = build_services(settings)
+    repository = CallRepository(settings.database_url)
+    await repository.start()
+    services.calls = repository
     await services.start()
 
     app.state.services = services
@@ -48,6 +52,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         log.info("shutting down")
         await app.state.calls.drain(timeout=15)
         await services.close()
+        await repository.close()
 
 
 async def _seed_knowledge(services) -> None:

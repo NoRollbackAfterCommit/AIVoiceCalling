@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
@@ -38,6 +39,7 @@ class CallRepository:
         self._dropped = 0
 
     async def start(self) -> None:
+        _ensure_parent_dir(self._url)
         self._engine = create_async_engine(self._url, future=True)
         async with self._engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
@@ -159,6 +161,20 @@ class CallRepository:
             finally:
                 for _ in batch:
                     self._queue.task_done()
+
+
+def _ensure_parent_dir(url: str) -> None:
+    """SQLite will not create a missing directory, and the default database_url
+    points at ./data — which does not exist in a fresh checkout, so the server
+    would refuse to boot with "unable to open database file"."""
+    if not url.startswith("sqlite"):
+        return
+    _, _, path = url.partition(":///")
+    if not path or path.startswith(":memory:"):
+        return
+    parent = Path(path).expanduser().parent
+    if parent.name:
+        parent.mkdir(parents=True, exist_ok=True)
 
 
 def _as_dict(row: Any) -> dict[str, Any]:

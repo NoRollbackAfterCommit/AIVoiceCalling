@@ -242,7 +242,12 @@ async def live_calls(request: Request) -> list[dict[str, Any]]:
 async def call_history(
     request: Request, limit: int = Query(50, ge=1, le=500)
 ) -> list[dict[str, Any]]:
-    return request.app.state.calls.history(limit)
+    """Served from the database when one is configured: the in-memory manager
+    only knows about calls this process handled, which is not an audit trail."""
+    repository = request.app.state.services.calls
+    if repository is None:
+        return request.app.state.calls.history(limit)
+    return await repository.recent(limit)
 
 
 @router.get("/calls/{call_id}", tags=["calls"])

@@ -116,3 +116,19 @@ async def test_finishing_an_unknown_call_is_a_no_op(repo):
     """A call rejected at capacity never got a row. Finishing it must not raise."""
     await repo.finish_call(FakeRecord(call_id="never-created", outcome="rejected"))
     assert await repo.get_call("never-created") is None
+
+
+async def test_start_creates_a_missing_parent_directory(tmp_path):
+    """The default database_url points at ./data, which does not exist in a
+    fresh checkout. SQLite will not create it, so start() must."""
+    target = tmp_path / "nested" / "deeper" / "calls.db"
+    assert not target.parent.exists()
+
+    r = CallRepository(f"sqlite+aiosqlite:///{target}")
+    await r.start()
+    try:
+        await r.create_call(FakeRecord())
+        assert (await r.get_call("c1"))["call_id"] == "c1"
+        assert target.exists()
+    finally:
+        await r.close()

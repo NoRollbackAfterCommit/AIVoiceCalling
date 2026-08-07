@@ -211,6 +211,11 @@ class CallSession:
             "call started",
             extra={"agent": self.record.agent_key, "direction": self.record.direction},
         )
+        if self._services.calls is not None:
+            # A row from the moment the call connects, so a crash mid-call still
+            # leaves an audit trail rather than nothing.
+            with contextlib.suppress(Exception):
+                await self._services.calls.create_call(self.record)
         await self._emit_state()
         watchdog = asyncio.create_task(self._watchdog())
         # The consumer runs concurrently with the greeting rather than after it.
@@ -385,6 +390,17 @@ class CallSession:
                 "metrics": asdict(metrics),
             }
         )
+        if self._services.calls is not None:
+            # Queued, not awaited: persistence must never sit on the turn loop.
+            index = len(self.record.turns) - 1
+            language = self._language.current
+            self._services.calls.append_turn(
+                self.call_id, index * 2, "caller", transcript.text, language, asdict(metrics)
+            )
+            self._services.calls.append_turn(
+                self.call_id, index * 2 + 1, "agent", turn.text, language, asdict(metrics)
+            )
+
         await self._transport.send_event({"type": "metrics", **asdict(metrics)})
 
         # 4. Act on anything a tool asked the call to do
@@ -546,6 +562,11 @@ class CallSession:
             self.record.summary = await self._agent.summarise()
         if self._recording:
             await self._save_recording()
+        if self._services.calls is not None:
+            # Best effort: a storage failure must not turn a completed call into
+            # an exception the transport sees.
+            with contextlib.suppress(Exception):
+                await self._services.calls.finish_call(self.record)
         log.info(
             "call ended",
             extra={
