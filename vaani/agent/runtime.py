@@ -52,6 +52,17 @@ class ConversationAgent:
         self._history: list[Message] = []
         self._schemas = tools.schemas(profile.tools)
 
+    def set_language(self, language: str) -> None:
+        """Rebuild the system prompt around the caller's chosen language.
+
+        Replacing the prompt rather than appending a note: a later instruction
+        competing with the original one is how models drift back to the language
+        they saw first.
+        """
+        self._system = Message(
+            role="system", content=render_system_prompt(self._profile, language=language)
+        )
+
     # -- memory -------------------------------------------------------------
 
     @property

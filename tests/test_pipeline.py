@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import math
 import struct
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -84,6 +85,11 @@ def settings() -> Settings:
 @pytest.fixture
 async def services(settings: Settings):
     svc = build_services(settings)
+    # Conversation tests should not also be exercising language selection: with
+    # it on, the first caller turn answers "which language?" instead of asking
+    # the agent anything. The selection flow has its own tests.
+    # A copy, not a mutation: the default profile is shared across the process.
+    svc.profiles["default"] = replace(svc.profiles["default"], ask_language=False)
     await svc.start()
     yield svc
     await svc.close()

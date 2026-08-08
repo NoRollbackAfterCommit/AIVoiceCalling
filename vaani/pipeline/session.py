@@ -35,11 +35,13 @@ from typing import Any, Protocol
 
 from vaani.agent.runtime import ConversationAgent
 from vaani.agent.tools.base import ToolContext
+from vaani.audio.hold import hold_loop
 from vaani.audio.vad import BargeInDetector, TurnDetector, iter_frames
 from vaani.config import FRAME_BYTES, SAMPLE_RATE, Settings
 from vaani.core.logging import call_id_var, get_logger
 from vaani.core.registry import Services
-from vaani.pipeline.language import LanguageTracker
+from vaani.pipeline.language import LanguageTracker, detect_choice
+from vaani.providers.base import Transcript
 
 log = get_logger(__name__)
 
@@ -155,6 +157,10 @@ class CallSession:
             default=next(iter(self._profile.voices), "hi-IN"),
             voices=self._profile.voices,
         )
+        # The first caller utterance answers "which language?" rather than being
+        # a question for the agent.
+        self._awaiting_language = False
+        self._hold: asyncio.Task[None] | None = None
 
         self._turns = TurnDetector(
             silence_ms=self._settings.end_of_turn_silence_ms,
@@ -226,7 +232,13 @@ class CallSession:
         consumer = asyncio.create_task(self._consume())
         ended = asyncio.create_task(self._done.wait())
         try:
-            await self._speak(self._profile.greeting, kind="greeting")
+            # Open in English asking for a language, rather than guessing. A
+            # guess that lands wrong costs the caller the whole first turn.
+            if self._profile.ask_language and not self._language.locked:
+                self._awaiting_language = True
+                await self._speak(self._profile.language_prompt, kind="greeting")
+            else:
+                await self._speak(self._profile.greeting, kind="greeting")
             if self.state != CallState.ENDED:
                 self._set_state(CallState.LISTENING)
             # The call is over when the caller's audio stream ends or something
@@ -326,12 +338,23 @@ class CallSession:
         metrics = TurnMetrics(audio_s=round(audio_s, 2))
         turn_started = time.monotonic()
 
+        # Cover the pause. Recognition, the model and synthesis together run to
+        # well over a second, and a line that goes silent for that long reads as
+        # a dropped call — callers say "hello?" into it, which then arrives as a
+        # fresh turn and derails the conversation.
+        self._start_hold()
+
         # 1. Speech to text
         t0 = time.monotonic()
         transcript = await self._services.stt.transcribe(audio)
         metrics.stt_ms = int((time.monotonic() - t0) * 1000)
 
+        if self._awaiting_language:
+            await self._settle_language(transcript)
+            return
+
         if not transcript.text.strip():
+            await self._stop_hold()
             self._set_state(CallState.LISTENING)
             return
 
@@ -415,6 +438,74 @@ class CallSession:
         if self.state != CallState.ENDED:
             self._set_state(CallState.LISTENING)
 
+    # -- comfort audio ------------------------------------------------------
+
+    def _start_hold(self) -> None:
+        """Play a quiet tone under the thinking pause until real audio is ready."""
+        if self._hold is not None or self.state == CallState.ENDED:
+            return
+
+        async def play() -> None:
+            loop = hold_loop()
+            chunk_s = 0.2
+            try:
+                while True:
+                    await self._transport.send_audio(next(loop))
+                    # Paced to real time like any other audio, or it floods the
+                    # far end's buffer and keeps playing after the agent starts.
+                    await asyncio.sleep(chunk_s)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.debug("hold audio stopped")
+
+        self._hold = asyncio.create_task(play(), name=f"hold:{self.call_id}")
+
+    async def _stop_hold(self) -> None:
+        task, self._hold = self._hold, None
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+
+    # -- language selection -------------------------------------------------
+
+    async def _settle_language(self, transcript: Transcript) -> None:
+        """Interpret the first reply as the caller's language choice.
+
+        A named language wins over the language they happened to say it in, and
+        an unrecognisable answer keeps English rather than asking twice — a
+        caller who could not answer the question the first time will not answer
+        it better the second.
+        """
+        # Restricted to languages we can both speak and confirm in. Without this
+        # a detected language with no voice gets locked in and the caller hears
+        # English back after asking for something else.
+        allowed = {code for code in self._profile.voices if code in CONFIRMATIONS}
+        choice = detect_choice(transcript.text, transcript.language, allowed=allowed or None)
+        if choice is None or (allowed and choice not in allowed):
+            choice = "en-IN" if "en-IN" in (allowed or {"en-IN"}) else self._language.current
+            log.info(
+                "language choice unclear, defaulting",
+                extra={"heard": transcript.text[:60], "language": choice},
+            )
+
+        self._language.lock(choice)
+        self._awaiting_language = False
+        self.record.language = choice
+        self._tool_ctx.language = choice
+        self._agent.set_language(choice)
+
+        await self._transport.send_event({"type": "language", "language": choice})
+        await self._stop_hold()
+        # Confirm in the chosen language, so the caller hears immediately that it
+        # worked rather than taking it on trust.
+        await self._speak(
+            CONFIRMATIONS.get(choice, self._profile.greeting), kind="greeting"
+        )
+        if self.state != CallState.ENDED:
+            self._set_state(CallState.LISTENING)
+
     # -- speaking -----------------------------------------------------------
 
     async def _speak(self, text: str, *, kind: str = "reply") -> int:
@@ -437,6 +528,7 @@ class CallSession:
         if not text.strip() or self.state == CallState.ENDED:
             return 0
 
+        await self._stop_hold()
         self._set_state(CallState.SPEAKING)
         self._barge_in.reset()
         first_chunk_ms = 0
@@ -543,6 +635,7 @@ class CallSession:
             raise
 
     async def _finish(self) -> None:
+        await self._stop_hold()
         await self._cancel_playback()
         if self._turn_task and not self._turn_task.done():
             self._turn_task.cancel()
@@ -614,3 +707,15 @@ class CallSession:
     async def _emit_state(self) -> None:
         with contextlib.suppress(Exception):
             await self._transport.send_event({"type": "state", "state": self.state})
+
+
+# Spoken confirmation that the language took effect, in the language itself.
+CONFIRMATIONS: dict[str, str] = {
+    "en-IN": "Certainly, we will continue in English. How may I help you today?",
+    "hi-IN": "ठीक है, हम हिंदी में बात करेंगे। मैं आपकी क्या सहायता कर सकता हूँ?",
+    "bn-IN": "ঠিক আছে, আমরা বাংলায় কথা বলব। আমি আপনাকে কীভাবে সাহায্য করতে পারি?",
+    "mr-IN": "ठीक आहे, आपण मराठीत बोलू. मी आपली काय मदत करू शकतो?",
+    "gu-IN": "સારું, આપણે ગુજરાતીમાં વાત કરીશું. હું આપની કેવી મદદ કરી શકું?",
+    "pa-IN": "ਠੀਕ ਹੈ, ਅਸੀਂ ਪੰਜਾਬੀ ਵਿੱਚ ਗੱਲ ਕਰਾਂਗੇ। ਮੈਂ ਤੁਹਾਡੀ ਕੀ ਮਦਦ ਕਰ ਸਕਦਾ ਹਾਂ?",
+    "od-IN": "ଠିକ ଅଛି, ଆମେ ଓଡ଼ିଆରେ କଥା ହେବା। ମୁଁ ଆପଣଙ୍କୁ କିପରି ସାହାଯ୍ୟ କରିପାରିବି?",
+}

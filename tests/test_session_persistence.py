@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 
 import pytest
 
@@ -31,6 +32,8 @@ def _settings() -> Settings:
 @pytest.fixture
 async def services_with_db(tmp_path):
     svc = build_services(_settings())
+    # See tests/test_pipeline.py: language selection has its own tests.
+    svc.profiles["default"] = replace(svc.profiles["default"], ask_language=False)
     svc.calls = CallRepository(f"sqlite+aiosqlite:///{tmp_path / 'calls.db'}")
     await svc.calls.start()
     await svc.start()
@@ -91,6 +94,7 @@ async def test_the_record_survives_a_restart(tmp_path, services_with_db):
 async def test_sessions_run_fine_without_a_repository():
     """Persistence is optional: a bare install must still place calls."""
     svc = build_services(_settings())
+    svc.profiles["default"] = replace(svc.profiles["default"], ask_language=False)
     await svc.start()
     assert svc.calls is None
 
