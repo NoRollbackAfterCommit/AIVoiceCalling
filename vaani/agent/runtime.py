@@ -51,6 +51,7 @@ class ConversationAgent:
         self._system = Message(role="system", content=render_system_prompt(profile))
         self._history: list[Message] = []
         self._schemas = tools.schemas(profile.tools)
+        self._nudge: str = ""
 
     def set_language(self, language: str) -> None:
         """Rebuild the system prompt around the caller's chosen language.
@@ -74,22 +75,25 @@ class ConversationAgent:
             if m.role in ("user", "assistant") and m.content
         ]
 
-    def _window(self) -> list[Message]:
+    def _window(self, nudge: str = "") -> list[Message]:
         """System prompt plus a sliding window of recent history.
 
         Trimming is by message, but never in the middle of a tool exchange — an
         orphaned `tool` message with no matching `tool_calls` before it is a hard
         400 from most inference servers.
         """
+        # A one-shot nudge rides at the end, where it is closest to the reply
+        # being composed and hardest to ignore.
+        tail = [Message(role="system", content=nudge)] if nudge else []
         limit = self._history_turns * 2
         if len(self._history) <= limit:
-            return [self._system, *self._history]
+            return [self._system, *self._history, *tail]
         window = self._history[-limit:]
         while window and window[0].role in ("tool", "assistant") and not (
             window[0].role == "assistant" and window[0].content
         ):
             window.pop(0)
-        return [self._system, *window]
+        return [self._system, *window, *tail]
 
     def note_user(self, text: str) -> None:
         self._history.append(Message(role="user", content=text))
@@ -99,6 +103,16 @@ class ConversationAgent:
 
     # -- the loop -----------------------------------------------------------
 
+    def nudge(self, instruction: str) -> None:
+        """Steer the next reply only.
+
+        Used when the call has stalled. It goes to the model rather than being
+        spoken directly by the pipeline so the words come out in the caller's
+        chosen language and in the agent's own voice — a hardcoded English line
+        here would undo the language locking.
+        """
+        self._nudge = instruction
+
     async def respond(self, user_text: str) -> AgentTurn:
         started = time.monotonic()
         self.note_user(user_text)
@@ -106,10 +120,13 @@ class ConversationAgent:
         control: dict[str, Any] = {}
         invoked: list[dict[str, Any]] = []
         prompt_tokens = completion_tokens = 0
+        # One shot: taken for this turn and cleared, so a stall nudge does not
+        # keep steering every reply for the rest of the call.
+        nudge, self._nudge = self._nudge, ""
 
         for iteration in range(self._profile.max_tool_iterations):
             completion = await self._llm.complete(
-                self._window(),
+                self._window(nudge),
                 tools=self._schemas or None,
             )
             prompt_tokens += completion.prompt_tokens

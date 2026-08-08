@@ -33,6 +33,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol
 
+from vaani.agent.outcome import PLATFORM_FOR_OUTCOME
 from vaani.agent.runtime import ConversationAgent
 from vaani.agent.tools.base import ToolContext
 from vaani.audio.hold import hold_loop
@@ -41,6 +42,7 @@ from vaani.config import FRAME_BYTES, SAMPLE_RATE, Settings
 from vaani.core.logging import call_id_var, get_logger
 from vaani.core.registry import Services
 from vaani.pipeline.language import LanguageTracker, detect_choice
+from vaani.pipeline.progress import ProgressTracker
 from vaani.providers.base import Transcript
 
 log = get_logger(__name__)
@@ -86,7 +88,13 @@ class CallRecord:
     languages: set[str] = field(default_factory=set)
     # The language the agent settled on, as opposed to every one detected.
     language: str | None = None
+    # `outcome` is the transport result — did the call connect and end cleanly.
+    # `disposition` is the business result: did it achieve anything. A call can
+    # end perfectly and accomplish nothing, and conflating the two loses that.
     outcome: str = "in_progress"
+    disposition: str | None = None
+    disposition_reason: str | None = None
+    reference: str | None = None
     summary: str = ""
 
     @property
@@ -107,6 +115,9 @@ class CallRecord:
             "tool_calls": self.tool_calls,
             "languages": sorted(self.languages),
             "outcome": self.outcome,
+            "disposition": self.disposition,
+            "disposition_reason": self.disposition_reason,
+            "reference": self.reference,
             "summary": self.summary,
         }
 
@@ -161,6 +172,9 @@ class CallSession:
         # a question for the agent.
         self._awaiting_language = False
         self._hold: asyncio.Task[None] | None = None
+        self._progress = ProgressTracker(stall_after=self._profile.stall_after)
+        # The tool needs to know which extra outcomes this deployment allows.
+        self._tool_ctx.state["extra_dispositions"] = list(self._profile.extra_dispositions)
 
         self._turns = TurnDetector(
             silence_ms=self._settings.end_of_turn_silence_ms,
@@ -413,6 +427,27 @@ class CallSession:
                 "metrics": asdict(metrics),
             }
         )
+        retrieved = any(t["name"] == "search_knowledge" for t in turn.tool_calls)
+        self._progress.observe(
+            caller_text=transcript.text,
+            agent_text=turn.text,
+            tool_ran=bool(turn.tool_calls),
+            retrieved=retrieved,
+        )
+
+        if self._progress.should_offer_fallback():
+            # Steer the *next* reply rather than speaking here. The words then
+            # come out in the caller's chosen language and in the agent's voice,
+            # and it stays an offer — nothing below may hang up on a caller who
+            # is still talking.
+            self._agent.nudge(
+                "This call is not making progress: the caller has raised the same "
+                "thing several times without it being resolved. Stop trying to "
+                "answer it again. Apologise briefly and offer them a concrete "
+                "choice: register a complaint with a reference number, arrange a "
+                "callback, or transfer to an officer. Ask which they would like."
+            )
+
         if self._services.calls is not None:
             # Queued, not awaited: persistence must never sit on the turn loop.
             index = len(self.record.turns) - 1
@@ -432,6 +467,9 @@ class CallSession:
             await self._transfer(turn.control)
             return
         if action == "hangup":
+            self.record.disposition = turn.control.get("disposition")
+            self.record.reference = turn.control.get("reference")
+            self.record.disposition_reason = self._tool_ctx.state.get("disposition_reason")
             await self.hangup("completed")
             return
 
@@ -655,6 +693,13 @@ class CallSession:
             self.record.summary = await self._agent.summarise()
         if self._recording:
             await self._save_recording()
+        if self.record.disposition is None:
+            # Nothing recorded an outcome, which means the caller left before the
+            # agent could. Only the platform knows why.
+            self.record.disposition = PLATFORM_FOR_OUTCOME.get(
+                self.record.outcome, "unresolved"
+            )
+
         if self._services.calls is not None:
             # Best effort: a storage failure must not turn a completed call into
             # an exception the transport sees.

@@ -103,6 +103,9 @@ class CallRepository:
             row.duration_s = getattr(record, "duration_s", 0.0)
             row.language = getattr(record, "language", None)
             row.recording_path = getattr(record, "recording_path", None)
+            row.disposition = getattr(record, "disposition", None)
+            row.disposition_reason = getattr(record, "disposition_reason", None)
+            row.reference = getattr(record, "reference", None)
 
     async def flush(self) -> None:
         """Wait for queued turns to land. Used at call end and in tests."""
@@ -128,6 +131,19 @@ class CallRepository:
                 select(CallRow).order_by(CallRow.started_at.desc()).limit(limit)
             )
             return [_as_dict(row) for row in result.scalars()]
+
+    async def disposition_counts(self) -> dict[str, int]:
+        """What calls actually achieved, in aggregate. This is the reason the
+        vocabulary is closed rather than free text."""
+        from sqlalchemy import func
+
+        async with self._sessions() as session:
+            result = await session.execute(
+                select(CallRow.disposition, func.count())
+                .where(CallRow.disposition.is_not(None))
+                .group_by(CallRow.disposition)
+            )
+            return {row[0]: row[1] for row in result}
 
     # -- lifecycle -----------------------------------------------------------
 

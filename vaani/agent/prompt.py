@@ -43,6 +43,13 @@ class AgentProfile:
     # Per-language voice, written as language:speaker. Behaviour is data, so a
     # deployment adds a language by editing this record, not the pipeline.
     voices: dict[str, str] = field(default_factory=dict)
+    # What a successful call achieves. Frames every other instruction, so it
+    # renders near the top.
+    objective: str = ""
+    # Domain outcomes this deployment needs on top of the core vocabulary.
+    extra_dispositions: list[str] = field(default_factory=list)
+    # Unproductive turns before the agent stops retrying and offers a fallback.
+    stall_after: int = 3
     # Open in English, ask which language the caller wants, then hold to it for
     # the rest of the call.
     ask_language: bool = True
@@ -50,7 +57,14 @@ class AgentProfile:
         "Namaste, and welcome. Which language would you prefer to continue in? "
         "You can say Hindi, English, Bengali, Marathi, Gujarati, Punjabi or Odia."
     )
-    tools: list[str] = field(default_factory=lambda: ["search_knowledge", "transfer_to_human"])
+    tools: list[str] = field(
+        default_factory=lambda: [
+            "search_knowledge",
+            "transfer_to_human",
+            "set_disposition",
+            "end_call",
+        ]
+    )
     max_tool_iterations: int = 4
 
 
@@ -125,6 +139,10 @@ def render_system_prompt(profile: AgentProfile, language: str | None = None) -> 
         f"Your role: {profile.role}",
         f"Speak in a {profile.tone} manner.",
         language_rule,
+    ]
+    if profile.objective:
+        sections += ["", "## What this call is for", profile.objective]
+    sections += [
         "",
         "## How to speak",
         VOICE_RULES,
@@ -162,6 +180,9 @@ def render_system_prompt(profile: AgentProfile, language: str | None = None) -> 
         # in view as it composes, and the end of the prompt is where it carries
         # most weight.
         "",
+        "## Bringing the call to an end",
+        CLOSING_RULES,
+        "",
         "## Check every answer against this",
         ANSWER_FRAMING,
     ]
@@ -192,6 +213,12 @@ DEFAULT_PROFILE = AgentProfile(
         "pa-IN": "pa-IN:simran",
         "od-IN": "od-IN:kavya",
     },
+    objective=(
+        "Establish what the caller needs, answer it from the knowledge base, and "
+        "close with a definite outcome — an answer, a registered complaint with a "
+        "reference number, a scheduled callback, or a transfer to an officer. Do "
+        "not end the call without one of those."
+    ),
     policies=[
         "Office hours are ten in the morning to six in the evening, Monday to Friday.",
         "Always confirm the caller's registered mobile number before making any change.",
@@ -202,3 +229,15 @@ DEFAULT_PROFILE = AgentProfile(
         "Political opinions",
     ],
 )
+
+
+CLOSING_RULES = """\
+Drive the call to a conclusion rather than letting it drift:
+- Establish what the caller needs within the first two exchanges.
+- Once you have answered, confirm once — "is there anything else?" — and if the
+  caller says no, record the outcome and end the call. Do not ask a second time.
+- If you have not managed to help after three exchanges, stop retrying. Offer to
+  register a complaint, arrange a callback, or transfer to an officer.
+- Before ending any call, record what happened with set_disposition. You cannot
+  end a call without it.
+- Never hang up while the caller is still speaking or still has something to say."""

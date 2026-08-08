@@ -102,6 +102,68 @@ async def transfer_to_human(
 
 
 @registry.tool(
+    name="set_disposition",
+    description=(
+        "Record how this call ended, before ending it. Required: end_call will "
+        "not run without it. Choose the outcome that actually happened."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "disposition": {
+                "type": "string",
+                "description": (
+                    "One of: resolved, complaint_registered, callback_scheduled, "
+                    "transferred, out_of_scope, unresolved."
+                ),
+            },
+            "reason": {"type": "string", "description": "One line of justification."},
+            "reference": {
+                "type": "string",
+                "description": "The reference number, for a complaint or callback.",
+            },
+        },
+        "required": ["disposition", "reason"],
+    },
+)
+async def set_disposition(
+    disposition: str, reason: str, ctx: ToolContext, reference: str = ""
+) -> ToolResult:
+    from vaani.agent.outcome import AGENT_SET, REQUIRES_REFERENCE
+
+    allowed = AGENT_SET | set(ctx.state.get("extra_dispositions") or ())
+    if disposition not in allowed:
+        # Refusing an invented outcome is what keeps the vocabulary closed, and
+        # therefore what makes the numbers comparable across departments.
+        return ToolResult(
+            content=(
+                f"'{disposition}' is not a valid outcome. Choose one of: "
+                f"{', '.join(sorted(allowed))}."
+            ),
+            ok=False,
+        )
+
+    if disposition in REQUIRES_REFERENCE and not reference.strip():
+        return ToolResult(
+            content=(
+                f"A {disposition} outcome needs the reference number you gave the "
+                "caller. Call the tool again with it."
+            ),
+            ok=False,
+        )
+
+    ctx.state["disposition"] = disposition
+    ctx.state["disposition_reason"] = reason
+    if reference.strip():
+        ctx.state["reference"] = reference.strip()
+
+    return ToolResult(
+        content="Outcome recorded. You may now end the call.",
+        data={"disposition": disposition, "reference": reference},
+    )
+
+
+@registry.tool(
     name="end_call",
     description=(
         "End the call. Use only after the caller has confirmed they need nothing "
@@ -116,10 +178,23 @@ async def transfer_to_human(
     },
 )
 async def end_call(summary: str, ctx: ToolContext) -> ToolResult:
+    disposition = ctx.state.get("disposition")
+    if not disposition:
+        # Refusing here is what makes the audit trail complete by construction
+        # rather than by anyone remembering to fill it in.
+        return ToolResult(
+            content="Record the outcome first with set_disposition, then end the call.",
+            ok=False,
+        )
     return ToolResult(
         content="Say your closing line, then stop.",
-        control={"action": "hangup", "summary": summary},
-        data={"summary": summary},
+        control={
+            "action": "hangup",
+            "summary": summary,
+            "disposition": disposition,
+            "reference": ctx.state.get("reference"),
+        },
+        data={"summary": summary, "disposition": disposition},
     )
 
 

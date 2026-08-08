@@ -29,6 +29,11 @@ class CallRow(Base):
     language: Mapped[str | None] = mapped_column(String(16), nullable=True)
     duration_s: Mapped[float] = mapped_column(Float, default=0.0)
     recording_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The business result, indexed because "how many complaints last month" is
+    # the first question a government buyer asks.
+    disposition: Mapped[str | None] = mapped_column(String(48), nullable=True, index=True)
+    disposition_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reference: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
 
 class TurnRow(Base):
