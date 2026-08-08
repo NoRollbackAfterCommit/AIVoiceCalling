@@ -207,7 +207,10 @@ DEFAULT_PROFILE = AgentProfile(
     voices={
         "en-IN": "en-IN:priya",
         "hi-IN": "hi-IN:priya",
-        "bn-IN": "bn-IN:ritu",
+        # shreya over ritu: chosen by ear on a side-by-side of the same Bengali
+        # sentence. Pronunciation is the whole point of using Bulbul, so these
+        # are picked by listening rather than by taking the default.
+        "bn-IN": "bn-IN:shreya",
         "mr-IN": "mr-IN:neha",
         "gu-IN": "gu-IN:pooja",
         "pa-IN": "pa-IN:simran",
