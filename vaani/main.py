@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -38,6 +39,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     repository = CallRepository(settings.database_url)
     await repository.start()
     services.calls = repository
+    retention = asyncio.create_task(
+        _enforce_retention(repository, settings), name="retention"
+    )
     await services.start()
 
     app.state.services = services
@@ -51,8 +55,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         log.info("shutting down")
         await app.state.calls.drain(timeout=15)
+        retention.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await retention
         await services.close()
         await repository.close()
+
+
+async def _enforce_retention(repository, settings: Settings) -> None:
+    """Apply the retention window at boot, then once a day.
+
+    Sweeping at boot matters as much as the daily pass: an on-premise box that
+    is powered off overnight would otherwise never reach the scheduled run.
+    """
+    while True:
+        try:
+            await repository.purge_older_than(settings.retention_days)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("retention sweep failed")
+        await asyncio.sleep(24 * 3600)
 
 
 async def _seed_knowledge(services) -> None:

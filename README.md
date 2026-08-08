@@ -272,3 +272,28 @@ before.
 ## Licence
 
 Apache 2.0. All bundled components are permissively licensed and self-hostable.
+
+## Upgrading
+
+The schema migrates itself. `CallRepository.start()` runs `alembic upgrade head`
+before opening the pool, so a deployment carrying an older database is brought
+forward on boot — including one created before the phase 2 disposition columns
+existed, which `create_all` would silently leave behind.
+
+That happens inside the application because an on-premise operator runs
+`docker compose up` and nothing else. It is safe for a single worker. A
+multi-worker deployment should run `alembic upgrade head` once in an init
+container instead, since concurrent upgrades race.
+
+Postgres needs the prod extra, which carries both drivers — asyncpg for the
+application and psycopg2 for Alembic:
+
+```bash
+docker compose build --build-arg EXTRAS='[prod]' vaani
+docker compose --profile prod up -d
+```
+
+Call records, transcripts and recordings are deleted once they pass
+`retention_days` (default 365). The sweep runs at boot and then daily; the boot
+pass matters because a box powered off overnight never reaches a scheduled run.
+Setting it to zero disables deletion rather than deleting everything.

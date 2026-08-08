@@ -13,14 +13,16 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from vaani.core.logging import get_logger
-from vaani.db.models import Base, CallRow, TurnRow
+from vaani.db.migrate import upgrade
+from vaani.db.models import CallRow, TurnRow
 
 log = get_logger(__name__)
 
@@ -40,9 +42,11 @@ class CallRepository:
 
     async def start(self) -> None:
         _ensure_parent_dir(self._url)
+        # Migrations, not create_all: the latter adds missing tables but never a
+        # missing column, so an upgraded deployment boots healthy on the old
+        # schema and fails at the first write of a new field.
+        await asyncio.to_thread(upgrade, self._url)
         self._engine = create_async_engine(self._url, future=True)
-        async with self._engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
         self._sessions = async_sessionmaker(self._engine, expire_on_commit=False)
         self._writer = asyncio.create_task(self._drain(), name="call-writer")
         log.info("call repository ready")
@@ -144,6 +148,50 @@ class CallRepository:
                 .group_by(CallRow.disposition)
             )
             return {row[0]: row[1] for row in result}
+
+    async def purge_older_than(self, days: int) -> int:
+        """Delete calls, their turns and their recordings past the retention window.
+
+        A retention setting that nothing enforces is worse than none at all: it
+        is the answer a government buyer is given about how long citizen
+        recordings are kept, and it has to be true.
+
+        Turns go first — the foreign key means the reverse order fails on any
+        backend that enforces it.
+        """
+        if days <= 0:
+            return 0
+        cutoff = time.time() - days * 86400
+
+        async with self._sessions() as session, session.begin():
+            stale = (
+                await session.execute(
+                    select(CallRow.call_id, CallRow.recording_path).where(
+                        CallRow.started_at < cutoff
+                    )
+                )
+            ).all()
+            if not stale:
+                return 0
+            ids = [row[0] for row in stale]
+            await session.execute(delete(TurnRow).where(TurnRow.call_id.in_(ids)))
+            await session.execute(delete(CallRow).where(CallRow.call_id.in_(ids)))
+
+        # The audio is the bulk of it and the most sensitive part, so a row
+        # deleted without its recording is not actually deleted.
+        removed = 0
+        for _, path in stale:
+            if not path:
+                continue
+            with contextlib.suppress(OSError):
+                Path(path).unlink(missing_ok=True)
+                removed += 1
+
+        log.info(
+            "purged records past retention",
+            extra={"calls": len(ids), "recordings": removed, "days": days},
+        )
+        return len(ids)
 
     # -- lifecycle -----------------------------------------------------------
 
