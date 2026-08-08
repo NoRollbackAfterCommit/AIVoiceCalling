@@ -16,6 +16,8 @@ dependencies = [
     "sqlalchemy>=2.0",
     "aiosqlite>=0.20",
     "numpy>=1.26",
+    # Saarika realtime speech recognition is a WebSocket; httpx cannot do WS.
+    "websockets>=13.0",
     # audioop left the stdlib in 3.13, and vaani.audio.resample needs it for the
     # G.711 telephony codecs. requires-python allows 3.13, so without this the
     # package installs there and then fails at import.
