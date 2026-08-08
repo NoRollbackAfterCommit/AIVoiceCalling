@@ -21,6 +21,14 @@ dependencies = [
     # Schema migrations run at startup, so this is a runtime dependency rather
     # than a dev one.
     "alembic>=1.13",
+    # A real voice activity detector. Without it the pipeline falls back to a
+    # plain energy gate, which treats room hum and a colleague talking behind
+    # the caller as speech and answers both.
+    "webrtcvad-wheels>=2.0.14",
+    # Persistent vector storage. Small and httpx-based — no torch — and the
+    # in-memory alternative loses every uploaded document on restart, which
+    # is not a property a knowledge base can have.
+    "qdrant-client>=1.12",
     # audioop left the stdlib in 3.13, and vaani.audio.resample needs it for the
     # G.711 telephony codecs. requires-python allows 3.13, so without this the
     # package installs there and then fails at import.
@@ -36,7 +44,6 @@ ai = [
 ]
 # Retrieval augmented generation against a real vector database.
 rag = [
-    "qdrant-client>=1.12",
     "sentence-transformers>=3.3",
     "pypdf>=5.1",
 ]

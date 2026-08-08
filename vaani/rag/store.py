@@ -183,15 +183,20 @@ class QdrantVectorStore:
     ) -> list[SearchHit]:
         from qdrant_client.models import FieldCondition, Filter, MatchValue
 
-        results = await self._client.search(
+        # query_points, not search: the latter was removed from the client, and
+        # calling it made every Qdrant-backed lookup a 500 rather than a bad
+        # result — the failure looked like an empty knowledge base.
+        response = await self._client.query_points(
             collection_name=self._collection,
-            query_vector=vector,
+            query=vector,
             query_filter=Filter(
                 must=[FieldCondition(key="namespace", match=MatchValue(value=namespace))]
             ),
             limit=top_k,
             score_threshold=min_score,
+            with_payload=True,
         )
+        results = response.points
         return [
             SearchHit(
                 text=r.payload.get("text", ""),

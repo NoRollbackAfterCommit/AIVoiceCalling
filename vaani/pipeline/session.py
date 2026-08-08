@@ -47,6 +47,9 @@ from vaani.providers.base import Transcript
 
 log = get_logger(__name__)
 
+# How many times to re-ask before settling on the default.
+_MAX_LANGUAGE_ATTEMPTS = 2
+
 
 class CallState:
     GREETING = "greeting"
@@ -171,6 +174,7 @@ class CallSession:
         # The first caller utterance answers "which language?" rather than being
         # a question for the agent.
         self._awaiting_language = False
+        self._language_attempts = 0
         self._hold: asyncio.Task[None] | None = None
         self._progress = ProgressTracker(stall_after=self._profile.stall_after)
         # The tool needs to know which extra outcomes this deployment allows.
@@ -364,6 +368,12 @@ class CallSession:
         metrics.stt_ms = int((time.monotonic() - t0) * 1000)
 
         if self._awaiting_language:
+            if not transcript.text.strip():
+                # Silence or noise that cleared the gate. Not an answer, so do
+                # not spend one of the attempts on it.
+                await self._stop_hold()
+                self._set_state(CallState.LISTENING)
+                return
             await self._settle_language(transcript)
             return
 
@@ -521,12 +531,27 @@ class CallSession:
         # English back after asking for something else.
         allowed = {code for code in self._profile.voices if code in CONFIRMATIONS}
         choice = detect_choice(transcript.text, transcript.language, allowed=allowed or None)
-        if choice is None or (allowed and choice not in allowed):
+        if choice is not None and allowed and choice not in allowed:
+            choice = None
+
+        if choice is None:
+            # Ask again rather than locking on a guess. The first turn of a call
+            # is the one most likely to be a door slamming or someone talking
+            # behind the caller, and locking English on that leaves them stuck
+            # in a language they did not ask for for the rest of the call.
+            self._language_attempts += 1
+            if self._language_attempts <= _MAX_LANGUAGE_ATTEMPTS:
+                log.info(
+                    "language choice unclear, asking again",
+                    extra={"heard": transcript.text[:60], "attempt": self._language_attempts},
+                )
+                await self._stop_hold()
+                await self._speak(self._profile.language_prompt, kind="greeting")
+                if self.state != CallState.ENDED:
+                    self._set_state(CallState.LISTENING)
+                return
             choice = "en-IN" if "en-IN" in (allowed or {"en-IN"}) else self._language.current
-            log.info(
-                "language choice unclear, defaulting",
-                extra={"heard": transcript.text[:60], "language": choice},
-            )
+            log.info("language still unclear, defaulting", extra={"language": choice})
 
         self._language.lock(choice)
         self._awaiting_language = False

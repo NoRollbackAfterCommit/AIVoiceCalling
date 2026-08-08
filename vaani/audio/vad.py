@@ -35,9 +35,16 @@ class VAD(Protocol):
 
 class EnergyVAD:
     """Adaptive gate: tracks the quietest recent frames as the noise floor and
-    calls anything sufficiently above it speech."""
+    calls anything sufficiently above it speech.
 
-    def __init__(self, margin_db: float = 10.0, floor_db: float = -55.0) -> None:
+    The margin is deliberately wide. This is the fallback for when webrtcvad is
+    missing, and a narrow one lets room hum, an air conditioner and a second
+    person talking behind the caller all read as speech — the agent then answers
+    the room instead of the caller. Speech on a phone line sits well clear of
+    18 dB above the floor; background noise mostly does not.
+    """
+
+    def __init__(self, margin_db: float = 18.0, floor_db: float = -50.0) -> None:
         self._margin = margin_db
         self._initial_floor = floor_db
         self._floor = floor_db

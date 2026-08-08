@@ -17,7 +17,7 @@ from vaani.core.registry import build_services
 from vaani.pipeline.language import LanguageTracker, detect_choice
 from vaani.pipeline.session import CONFIRMATIONS, CallSession
 
-from .test_pipeline import FakeTransport, silence, tone
+from .test_pipeline import FakeTransport
 
 VOICES = {
     "en-IN": "en-IN:priya",
@@ -128,29 +128,67 @@ async def test_the_call_opens_by_asking_for_a_language(services):
     await asyncio.wait_for(task, timeout=5)
 
 
-async def test_the_first_reply_locks_the_language_and_is_confirmed(services):
+async def test_a_clear_reply_locks_the_language_and_is_confirmed(services):
+    from vaani.providers.base import Transcript
+
     transport = FakeTransport()
     session = CallSession(transport, services)
     task = asyncio.create_task(session.run())
     await asyncio.sleep(0.3)
+    session._awaiting_language = True
 
-    for chunk in (tone(600), silence(500)):
-        for i in range(0, len(chunk) - 640 + 1, 640):
-            await session.push_audio(chunk[i : i + 640])
-    await asyncio.sleep(1.2)
+    await session._settle_language(
+        Transcript(text="Bengali please", is_final=True, language="en-IN")
+    )
 
     assert session._language.locked is True
+    assert session._language.current == "bn-IN", "a named language must win"
     assert session._awaiting_language is False
-    assert session.record.language == session._language.current
+    assert session.record.language == "bn-IN"
 
-    # The caller is told, in the chosen language, that it worked.
     langs = transport.of_type("language")
-    assert langs and langs[0]["language"] == session._language.current
-    spoken = [e["text"] for e in transport.of_type("speech")]
-    assert CONFIRMATIONS[session._language.current] in spoken
+    assert langs and langs[0]["language"] == "bn-IN"
+    assert CONFIRMATIONS["bn-IN"] in [e["text"] for e in transport.of_type("speech")]
 
     await session.hangup()
     await asyncio.wait_for(task, timeout=10)
+
+
+async def test_an_unclear_reply_asks_again_instead_of_locking(services):
+    """The first turn of a call is the one most likely to be a door slamming or
+    a colleague talking behind the caller. Locking English on that would strand
+    them in a language they never chose."""
+    from vaani.providers.base import Transcript
+
+    transport = FakeTransport()
+    session = CallSession(transport, services)
+    task = asyncio.create_task(session.run())
+    await asyncio.sleep(0.3)
+    session._awaiting_language = True
+
+    await session._settle_language(Transcript(text="mmm hmm", is_final=True, language=None))
+
+    assert session._language.locked is False, "an unclear answer must not lock"
+    assert session._awaiting_language is True, "it must still be waiting"
+    prompts = [e["text"] for e in transport.of_type("speech")]
+    assert prompts.count(services.profile("default").language_prompt) == 2
+
+    await session.hangup()
+    await asyncio.wait_for(task, timeout=10)
+
+
+async def test_it_settles_on_english_once_it_has_asked_enough(services):
+    from vaani.providers.base import Transcript
+
+    session = CallSession(FakeTransport(), services)
+    session._awaiting_language = True
+    unclear = Transcript(text="mmm hmm", is_final=True, language=None)
+
+    for _ in range(3):
+        await session._settle_language(unclear)
+
+    assert session._language.locked is True
+    assert session._language.current == "en-IN"
 
 
 async def test_every_offered_language_has_a_confirmation_line(services):
@@ -206,15 +244,17 @@ def test_offered_speakers_are_ones_bulbul_accepts():
         assert speaker in valid, f"{speaker!r} for {code} is not a bulbul:v3 speaker"
 
 
-async def test_an_unsupported_language_falls_back_to_english(services):
-    """A caller answering in Malayalam on a deployment that only offers seven
-    languages must get English, not a locked language with no voice."""
-    session = CallSession(FakeTransport(), services)
-    session._awaiting_language = True
+async def test_an_unsupported_language_eventually_falls_back_to_english(services):
+    """A caller answering in Malayalam on a deployment offering seven languages
+    must end up in English, never locked to a language with no voice."""
     from vaani.providers.base import Transcript
 
-    await session._settle_language(
-        Transcript(text="എനിക്ക് സഹായം വേണം", is_final=True, language="ml-IN")
-    )
+    session = CallSession(FakeTransport(), services)
+    session._awaiting_language = True
+    malayalam = Transcript(text="എനിക്ക്", is_final=True, language="ml-IN")
+
+    for _ in range(3):
+        await session._settle_language(malayalam)
+
     assert session._language.current == "en-IN"
     assert session._language.locked is True
