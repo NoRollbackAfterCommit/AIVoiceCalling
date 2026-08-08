@@ -346,12 +346,20 @@ class Settings(BaseSettings):
              "the caller past this limit gets a polite 'all lines busy'.",
     )
     idle_prompt_after_s: float = cfg(
-        8.0, group="Conversation", label="Prompt after silence (s)", ge=2.0, le=120.0,
+        30.0, group="Conversation", label="Prompt after silence (s)", ge=2.0, le=120.0,
         restart=False,
+        help="Silence before the agent asks whether the caller is still there. "
+             "Measured from the moment the agent stops speaking, not from the "
+             "caller's last word. Below about twenty seconds it interrupts "
+             "people who are simply thinking, or reading a bill number off a "
+             "piece of paper, which callers find far more irritating than a "
+             "pause.",
     )
     idle_hangup_after_s: float = cfg(
-        25.0, group="Conversation", label="Hang up after silence (s)", ge=5.0, le=600.0,
+        90.0, group="Conversation", label="Hang up after silence (s)", ge=5.0, le=600.0,
         restart=False,
+        help="Must be comfortably longer than the prompt above, or the call "
+             "ends before the caller has been asked anything.",
     )
 
     # ---- storage ----------------------------------------------------------

@@ -258,3 +258,29 @@ async def test_an_unsupported_language_eventually_falls_back_to_english(services
 
     assert session._language.current == "en-IN"
     assert session._language.locked is True
+
+
+def test_the_idle_prompt_exists_in_every_offered_language():
+    """Hearing an English "are you still there?" part-way through a Bengali
+    call reads as the agent having lost track of the conversation."""
+    from vaani.agent.prompt import DEFAULT_PROFILE
+    from vaani.pipeline.session import IDLE_PROMPTS
+
+    for code in DEFAULT_PROFILE.voices:
+        assert code in IDLE_PROMPTS, f"no idle prompt for {code}"
+
+
+def test_the_hangup_window_is_longer_than_the_prompt_window():
+    """Otherwise the call ends before the caller is ever asked anything."""
+    from vaani.config import Settings
+
+    s = Settings()
+    assert s.idle_hangup_after_s > s.idle_prompt_after_s
+
+
+def test_silence_is_measured_generously_enough_for_a_thinking_caller():
+    """Below about twenty seconds this interrupts someone reading a bill number
+    off a piece of paper, which is what made it so irritating."""
+    from vaani.config import Settings
+
+    assert Settings().idle_prompt_after_s >= 20.0

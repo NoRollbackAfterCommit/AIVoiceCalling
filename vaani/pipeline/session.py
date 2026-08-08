@@ -601,9 +601,9 @@ class CallSession:
         async def play() -> None:
             nonlocal first_chunk_ms
             sent_s = 0.0
+            first = True
+            voice = self._language.voice() or self._profile.voice
             try:
-                first = True
-                voice = self._language.voice() or self._profile.voice
                 async for chunk in self._services.tts.stream(
                     text, voice=voice
                 ):
@@ -622,8 +622,15 @@ class CallSession:
             except asyncio.CancelledError:
                 raise
             except Exception:
-                log.exception("tts failed")
+                log.exception("tts failed", extra={"chars": len(text)})
             finally:
+                if first and self.state != CallState.ENDED:
+                    # Nothing was ever sent. The caller hears the agent skip a
+                    # sentence, so this must not stay silent in the log too.
+                    log.warning(
+                        "no audio produced for a reply",
+                        extra={"chars": len(text), "voice": voice},
+                    )
                 finished.set()
 
         self._speaking_task = asyncio.create_task(play())
@@ -637,6 +644,12 @@ class CallSession:
             await finished.wait()
 
         self._speaking_task = None
+        # The caller's turn starts now. Measuring silence from their *last*
+        # audio counts the agent's own reply as dead air, so a ten second answer
+        # exhausts the window before they can open their mouth — which is why
+        # "are you still there?" fired after almost every sentence.
+        self._last_caller_audio = time.monotonic()
+        self._idle_prompted = False
         if self.state == CallState.SPEAKING:
             self._set_state(CallState.LISTENING)
             self._turns.reset()
@@ -688,7 +701,12 @@ class CallSession:
                 idle = time.monotonic() - self._last_caller_audio
                 if not self._idle_prompted and idle > self._settings.idle_prompt_after_s:
                     self._idle_prompted = True
-                    await self._speak("Are you still there?", kind="idle_prompt")
+                    await self._speak(
+                        IDLE_PROMPTS.get(
+                            self._language.current, IDLE_PROMPTS["en-IN"]
+                        ),
+                        kind="idle_prompt",
+                    )
                 elif idle > self._settings.idle_hangup_after_s:
                     log.info("hanging up on silence")
                     await self._speak(self._profile.closing, kind="closing")
@@ -788,4 +806,18 @@ CONFIRMATIONS: dict[str, str] = {
     "gu-IN": "સારું, આપણે ગુજરાતીમાં વાત કરીશું. હું આપની કેવી મદદ કરી શકું?",
     "pa-IN": "ਠੀਕ ਹੈ, ਅਸੀਂ ਪੰਜਾਬੀ ਵਿੱਚ ਗੱਲ ਕਰਾਂਗੇ। ਮੈਂ ਤੁਹਾਡੀ ਕੀ ਮਦਦ ਕਰ ਸਕਦਾ ਹਾਂ?",
     "od-IN": "ଠିକ ଅଛି, ଆମେ ଓଡ଼ିଆରେ କଥା ହେବା। ମୁଁ ଆପଣଙ୍କୁ କିପରି ସାହାଯ୍ୟ କରିପାରିବି?",
+}
+
+
+# Asked when the caller has gone quiet, in the language they chose. Hearing an
+# English question mid-way through a Bengali call is jarring and reads as the
+# agent having lost track of the conversation.
+IDLE_PROMPTS: dict[str, str] = {
+    "en-IN": "Are you still there?",
+    "hi-IN": "क्या आप अभी भी लाइन पर हैं?",
+    "bn-IN": "আপনি কি এখনও লাইনে আছেন?",
+    "mr-IN": "तुम्ही अजूनही लाइनवर आहात का?",
+    "gu-IN": "શું તમે હજુ પણ લાઇન પર છો?",
+    "pa-IN": "ਕੀ ਤੁਸੀਂ ਹਾਲੇ ਵੀ ਲਾਈਨ ਉੱਤੇ ਹੋ?",
+    "od-IN": "ଆପଣ କଣ ଏବେ ବି ଲାଇନରେ ଅଛନ୍ତି?",
 }
