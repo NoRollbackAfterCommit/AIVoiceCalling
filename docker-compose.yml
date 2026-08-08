@@ -1,8 +1,14 @@
 # Full self-hosted stack. Nothing here calls out to the internet at runtime,
 # which is the whole point for an on-premise or government-cloud deployment.
 #
-#   docker compose up -d                      # mock providers, no GPU
+#   docker compose up -d                      # mock providers, SQLite, no GPU
 #   docker compose --profile ai up -d         # + Ollama and Qdrant
+#   docker compose --profile prod up -d       # + Postgres and Redis
+#
+# The default stack is the pilot: SQLite in a volume, no external data plane.
+# Postgres needs the prod extra installed in the image (asyncpg), so it sits
+# behind a profile rather than in the default path — otherwise a plain
+# `docker compose up` fails at startup on a driver the image does not carry.
 #
 services:
   vaani:
@@ -10,8 +16,11 @@ services:
     container_name: vaani
     restart: unless-stopped
     ports:
-      - '8080:8080'   # HTTP API + WebSocket media
-      - '9092:9092'   # Asterisk AudioSocket
+      # Host 8090 rather than 8080: EnterpriseDB and several other Windows
+      # installers claim 8080, and the collision presents as a container that
+      # starts but never answers.
+      - '${VAANI_HOST_PORT:-8090}:8080'   # HTTP API + WebSocket media
+      - '9092:9092'                       # Asterisk AudioSocket
     environment:
       VAANI_HOST: 0.0.0.0
       VAANI_PORT: 8080
@@ -24,15 +33,14 @@ services:
       VAANI_LLM_MODEL: ${VAANI_LLM_MODEL:-qwen2.5:7b-instruct}
       VAANI_VECTOR_STORE: ${VAANI_VECTOR_STORE:-memory}
       VAANI_QDRANT_URL: http://qdrant:6333
-      VAANI_DATABASE_URL: postgresql+asyncpg://vaani:vaani@postgres:5432/vaani
-      VAANI_REDIS_URL: redis://redis:6379/0
+      # SQLite in the data volume by default. Point this at Postgres only with
+      # an image built as `--build-arg EXTRAS='[prod]'`, which carries asyncpg.
+      VAANI_DATABASE_URL: ${VAANI_DATABASE_URL:-sqlite+aiosqlite:////app/data/vaani.db}
+      VAANI_REDIS_URL: ${VAANI_REDIS_URL:-}
     volumes:
       - vaani-data:/app/data
       - vaani-models:/app/models
       - ./knowledge:/app/knowledge:ro
-    depends_on:
-      postgres:
-        condition: service_healthy
     healthcheck:
       test: ['CMD', 'python', '-c',
              "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/api/health')"]
@@ -45,6 +53,7 @@ services:
     image: postgres:17-alpine
     container_name: vaani-postgres
     restart: unless-stopped
+    profiles: ['prod']
     environment:
       POSTGRES_USER: vaani
       POSTGRES_PASSWORD: vaani   # override in any real deployment
@@ -61,6 +70,7 @@ services:
     image: redis:7-alpine
     container_name: vaani-redis
     restart: unless-stopped
+    profiles: ['prod']
     command: redis-server --save '' --appendonly no
     volumes:
       - vaani-redis:/data

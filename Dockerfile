@@ -41,5 +41,6 @@ USER vaani
 
 EXPOSE 8080 9092
 
-CMD ["uvicorn", "vaani.main:app", "--host", "0.0.0.0", "--port", "8080", \
-     "--log-config", "/dev/null"]
+# No --log-config: uvicorn rejects an empty file, and vaani.core.logging already
+# reconfigures uvicorn's own loggers onto the JSON formatter at startup.
+CMD ["uvicorn", "vaani.main:app", "--host", "0.0.0.0", "--port", "8080"]
