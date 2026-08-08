@@ -83,6 +83,7 @@ class SarvamSTT:
             text=(payload.get("transcript") or "").strip(),
             is_final=True,
             language=payload.get("language_code") or language or self._language,
+            confidence=_as_float(payload.get("language_probability")),
             duration_s=duration,
         )
 
@@ -98,6 +99,14 @@ class SarvamSTT:
         http, self._http = self._http, None
         if http is not None:
             await http.aclose()
+
+
+def _as_float(value: Any) -> float | None:
+    """language_probability comes back as a string, e.g. "0.897"."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _to_wav(pcm: bytes, rate: int = SAMPLE_RATE) -> bytes:

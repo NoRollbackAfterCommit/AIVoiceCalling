@@ -246,9 +246,12 @@ class Settings(BaseSettings):
         depends_on={"tts_provider": ["sarvam"]},
     )
     sarvam_voice: str = cfg(
-        "hi-IN:anushka", group="Text to speech", label="Sarvam voice",
-        help="Written as language:speaker, for example hi-IN:meera or "
-             "bn-IN:anushka. The language half selects pronunciation.",
+        "hi-IN:priya", group="Text to speech", label="Sarvam voice",
+        help="Written as language:speaker, for example hi-IN:priya or "
+             "bn-IN:ritu. The language half selects pronunciation. Speakers are "
+             "model-specific and the API rejects a mismatch outright — bulbul:v3 "
+             "accepts aditya, ritu, ashutosh, priya, neha, rahul, pooja, rohan, "
+             "simran, kavya, amit, dev, ishita, shreya and others.",
         depends_on={"tts_provider": ["sarvam"]},
     )
     tts_voice: str = cfg(

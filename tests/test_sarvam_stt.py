@@ -104,3 +104,33 @@ async def test_start_sends_the_key_as_a_subscription_header():
         assert str(stt._http.base_url) == "https://api.sarvam.ai"
     finally:
         await stt.close()
+
+
+async def test_language_probability_becomes_confidence():
+    """Verified against the live API on 2026-08-08: Saarika returns
+    language_probability as a *string*, e.g. "0.897"."""
+    stt = SarvamSTT(api_key="k")
+    stt._http = _stub(
+        lambda r: httpx.Response(
+            200,
+            json={
+                "request_id": "20260808_x",
+                "transcript": "मेरा बिल",
+                "language_code": "hi-IN",
+                "language_probability": "0.897",
+            },
+        )
+    )
+    result = await stt.transcribe(_pcm(500))
+    assert result.confidence == pytest.approx(0.897)
+    assert result.language == "hi-IN"
+
+
+async def test_an_unparseable_probability_is_not_fatal():
+    stt = SarvamSTT(api_key="k")
+    stt._http = _stub(
+        lambda r: httpx.Response(
+            200, json={"transcript": "x", "language_probability": "n/a"}
+        )
+    )
+    assert (await stt.transcribe(_pcm(500))).confidence is None

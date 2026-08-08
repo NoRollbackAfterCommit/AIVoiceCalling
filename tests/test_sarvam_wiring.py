@@ -57,3 +57,15 @@ def test_importing_sarvam_modules_needs_no_sdk():
 def test_the_configured_voice_reaches_the_provider():
     s = Settings(tts_provider="sarvam", sarvam_api_key="k", sarvam_voice="bn-IN:anushka")
     assert build_tts(s)._default_voice == "bn-IN:anushka"
+
+
+def test_the_default_voice_is_a_speaker_bulbul_actually_accepts():
+    """Verified live on 2026-08-08: the API rejects an unknown speaker with a
+    400, so a bad default would fail every single call."""
+    valid_bulbul_v3 = {
+        "aditya", "ritu", "ashutosh", "priya", "neha", "rahul", "pooja", "rohan",
+        "simran", "kavya", "amit", "dev", "ishita", "shreya", "ratan", "varun",
+    }
+    language, _, speaker = Settings().sarvam_voice.partition(":")
+    assert language == "hi-IN"
+    assert speaker in valid_bulbul_v3, f"{speaker!r} is not a bulbul:v3 speaker"
