@@ -1,7 +1,7 @@
 # Phase 2 — Outcome engine
 
 **Date:** 2026-08-08
-**Status:** Draft, pending three decisions (marked ◆)
+**Status:** Approved. All three decisions resolved 2026-08-08.
 **Phase:** 2 of 6
 
 ## The problem
@@ -60,8 +60,8 @@ A closed vocabulary, recorded on every call:
 The first six are set by the agent through a tool. The last three are set by the
 platform, because a caller who has hung up cannot call a tool.
 
-◆ **Decision 1 — is this vocabulary fixed platform-wide, or per profile?**
-*Recommendation: fixed core, with an optional per-profile extension list.* A
+**Decision 1 — resolved: fixed core, with an optional per-profile extension
+list.** A
 government deployment will want to compare complaint volumes across departments,
 and that only works if `complaint_registered` means the same thing everywhere.
 Profiles that need a domain-specific outcome add to the list rather than
@@ -90,13 +90,11 @@ The rules that follow from them:
 4. **`end_call` requires a disposition.** The tool refuses without one, which is
    what makes the audit trail complete by construction rather than by diligence.
 
-◆ **Decision 2 — how many unproductive turns before the agent offers a
-fallback?** *Recommendation: 3.* Two is impatient on a line where callers pause
-to think; five leaves the caller convinced the agent is useless.
+**Decision 2 — resolved: three unproductive turns.** Two is impatient on a line
+where callers pause to think; five leaves the caller convinced the agent is
+useless. The threshold is per profile, defaulting to 3.
 
-◆ **Decision 3 — may the agent close a call on its own judgement after
-confirmation, or must every call end with the caller hanging up?**
-*Recommendation: allow the agent to close after confirmation.* A government
+**Decision 3 — resolved: the agent may close after confirmation.** A government
 helpline is measured on line availability, and a caller who has said "no, that's
 all" and then sits through thirty seconds of silence is a worse experience than
 a clean goodbye.
