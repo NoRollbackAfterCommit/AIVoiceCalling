@@ -207,12 +207,14 @@ DEFAULT_PROFILE = AgentProfile(
     voices={
         "en-IN": "en-IN:priya",
         "hi-IN": "hi-IN:priya",
-        # shreya over ritu: chosen by ear on a side-by-side of the same Bengali
-        # sentence. Pronunciation is the whole point of using Bulbul, so these
-        # are picked by listening rather than by taking the default.
+        # Every voice below was chosen by ear, from side-by-side recordings of
+        # the same helpline sentence in each language — one carrying a spoken
+        # number, a date, a percentage and English loanwords, which is where a
+        # weak voice gives itself away. Pronunciation is the whole reason for
+        # using Bulbul over a Western vendor, so these are not defaults.
         "bn-IN": "bn-IN:shreya",
-        "mr-IN": "mr-IN:neha",
-        "gu-IN": "gu-IN:pooja",
+        "mr-IN": "mr-IN:pooja",
+        "gu-IN": "gu-IN:kavya",
         "pa-IN": "pa-IN:simran",
         "od-IN": "od-IN:kavya",
     },
