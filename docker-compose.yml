@@ -94,14 +94,17 @@ services:
       - '11434:11434'
     volumes:
       - vaani-ollama:/root/.ollama
-    # Remove this block on a CPU-only host.
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    # GPU passthrough is opt-in via the `gpu` profile below rather than the
+    # default, because reserving a device that is not present stops the
+    # container from starting at all — and most laptops running this are
+    # CPU-only. Uncomment on a machine with an NVIDIA card.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
 
 volumes:
   vaani-data:
