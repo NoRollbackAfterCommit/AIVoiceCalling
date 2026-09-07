@@ -29,6 +29,9 @@ class AgentProfile:
     closing: str = "Thank you for calling. Have a good day."
     # Domain rules the operator adds: policy, hours, eligibility, escalation.
     policies: list[str] = field(default_factory=list)
+    # How to use what retrieval returns — "prefer the newer circular", "quote
+    # fees exactly". Data, not code, so each deployment tunes it in the portal.
+    knowledge_guidelines: str = ""
     # Hard limits. These are the compliance surface for a government deployment.
     forbidden_topics: list[str] = field(default_factory=list)
     escalation_rules: list[str] = field(
@@ -134,8 +137,7 @@ def render_system_prompt(profile: AgentProfile, language: str | None = None) -> 
         )
 
     sections: list[str] = [
-        f"You are {profile.name}, a voice assistant answering calls for "
-        f"{profile.organisation}.",
+        f"You are {profile.name}, a voice assistant answering calls for {profile.organisation}.",
         f"Your role: {profile.role}",
         f"Speak in a {profile.tone} manner.",
         language_rule,
@@ -150,6 +152,9 @@ def render_system_prompt(profile: AgentProfile, language: str | None = None) -> 
         "## Accuracy",
         GROUNDING_RULES,
     ]
+
+    if profile.knowledge_guidelines:
+        sections += ["", "## How to use retrieved knowledge", profile.knowledge_guidelines]
 
     if profile.policies:
         sections += ["", "## Organisation rules", *(f"- {p}" for p in profile.policies)]

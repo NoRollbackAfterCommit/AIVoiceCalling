@@ -70,6 +70,7 @@ class AgentProfileIn(BaseModel):
     greeting: str = "Namaste. How may I help you today?"
     closing: str = "Thank you for calling. Have a good day."
     policies: list[str] = Field(default_factory=list)
+    knowledge_guidelines: str = ""
     forbidden_topics: list[str] = Field(default_factory=list)
     escalation_rules: list[str] | None = None
     voice: str | None = None
@@ -173,9 +174,7 @@ async def ingest_file(
 
         text = load_file(tmp_path)
         chunks = chunk_text(text, source=file.filename or tmp_path.name)
-        count = await request.app.state.services.retriever.index_chunks(
-            chunks, agent_key=agent_key
-        )
+        count = await request.app.state.services.retriever.index_chunks(chunks, agent_key=agent_key)
     except ValueError as exc:
         raise HTTPException(415, str(exc)) from exc
     finally:
@@ -193,9 +192,7 @@ async def search_knowledge(
 ) -> dict[str, Any]:
     """Exposed so operators can test retrieval quality without placing a call —
     the fastest way to diagnose 'the agent gave a wrong answer'."""
-    hits = await request.app.state.services.retriever.search(
-        q, agent_key=agent_key, top_k=top_k
-    )
+    hits = await request.app.state.services.retriever.search(q, agent_key=agent_key, top_k=top_k)
     return {
         "query": q,
         "hits": [
@@ -209,9 +206,7 @@ async def search_knowledge(
 async def delete_source(
     source: str, request: Request, agent_key: str = "default"
 ) -> dict[str, Any]:
-    removed = await request.app.state.services.retriever.delete_source(
-        source, agent_key=agent_key
-    )
+    removed = await request.app.state.services.retriever.delete_source(source, agent_key=agent_key)
     return {"source": source, "removed_chunks": removed}
 
 
