@@ -196,9 +196,15 @@ Asterisk over AudioSocket — plain TCP, no RTP stack, no media server.
 
 ```
 exten => 1912,1,Answer()
- same  =>       ,AudioSocket(${UUID},vaani-host:9092)
- same  =>       ,Hangup()
+ same  => n,Set(CALL_UUID=${UUID()})
+ same  => n,Set(R=${CURL(http://vaani-host:8080/api/telephony/announce,uuid=${CALL_UUID}&caller=${URIENCODE(${CALLERID(num)})}&did=${EXTEN})})
+ same  => n,AudioSocket(${CALL_UUID},vaani-host:9092)
+ same  => n,Hangup()
 ```
+
+The `CURL()` line is optional; it is how the call record learns the caller's
+number and which agent profile should answer. Full setup, including the SIP
+trunk and firewall, is in [`docs/telephony.md`](docs/telephony.md).
 
 Asterisk speaks 8 kHz; the pipeline speaks 16 kHz. Conversion happens at the
 edge in [`telephony/audiosocket.py`](vaani/telephony/audiosocket.py) and nowhere
@@ -258,10 +264,6 @@ before.
 
 ### Known limitations
 
-- **Agent profiles are not persisted.** Calls and turns are durable (SQLite by
-  default, Postgres with `[prod]`, migrations at boot, retention enforced), and
-  the vector store survives restarts when it is Qdrant. Profiles edited through
-  the API still live in process memory and reset on restart.
 - `MemoryVectorStore` is a brute-force scan. Correct and fast to a few thousand
   chunks; use Qdrant beyond that.
 - No authentication on the API. Do not expose this to a network before phase 6.

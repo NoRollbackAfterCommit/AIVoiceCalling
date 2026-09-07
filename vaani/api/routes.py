@@ -13,7 +13,7 @@ from typing import Any
 from fastapi import APIRouter, Body, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field
 
-from vaani.agent.prompt import AgentProfile, render_system_prompt
+from vaani.agent.prompt import AgentProfile, profile_to_dict, render_system_prompt
 from vaani.core.logging import get_logger
 
 log = get_logger(__name__)
@@ -60,22 +60,33 @@ async def ready(request: Request) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+# Defaults come from the dataclass so the two cannot disagree, and a test pins
+# this field list to it: a field this model forgets is one every save resets.
+_DEFAULTS = AgentProfile(key="_")
+
+
 class AgentProfileIn(BaseModel):
     key: str = Field(min_length=1, max_length=64)
-    name: str = "Assistant"
-    organisation: str = "the organisation"
-    role: str = "Answer caller questions accurately and help them complete tasks."
-    languages: list[str] = Field(default_factory=lambda: ["English"])
-    tone: str = "warm, patient, professional"
-    greeting: str = "Namaste. How may I help you today?"
-    closing: str = "Thank you for calling. Have a good day."
+    name: str = _DEFAULTS.name
+    organisation: str = _DEFAULTS.organisation
+    role: str = _DEFAULTS.role
+    languages: list[str] = Field(default_factory=lambda: list(_DEFAULTS.languages))
+    tone: str = _DEFAULTS.tone
+    greeting: str = _DEFAULTS.greeting
+    closing: str = _DEFAULTS.closing
     policies: list[str] = Field(default_factory=list)
-    knowledge_guidelines: str = ""
+    knowledge_guidelines: str = _DEFAULTS.knowledge_guidelines
     forbidden_topics: list[str] = Field(default_factory=list)
     escalation_rules: list[str] | None = None
     voice: str | None = None
-    tools: list[str] = Field(default_factory=lambda: ["search_knowledge", "transfer_to_human"])
-    max_tool_iterations: int = Field(default=4, ge=1, le=8)
+    voices: dict[str, str] = Field(default_factory=dict)
+    objective: str = _DEFAULTS.objective
+    extra_dispositions: list[str] = Field(default_factory=list)
+    stall_after: int = Field(default=_DEFAULTS.stall_after, ge=1, le=10)
+    ask_language: bool = _DEFAULTS.ask_language
+    language_prompt: str = _DEFAULTS.language_prompt
+    tools: list[str] = Field(default_factory=lambda: list(_DEFAULTS.tools))
+    max_tool_iterations: int = Field(default=_DEFAULTS.max_tool_iterations, ge=1, le=8)
 
 
 @router.get("/agents", tags=["agents"])
@@ -98,7 +109,7 @@ async def get_agent(key: str, request: Request) -> dict[str, Any]:
     profile = request.app.state.services.profiles.get(key)
     if profile is None:
         raise HTTPException(404, f"No agent profile {key!r}")
-    return {**profile.__dict__, "system_prompt": render_system_prompt(profile)}
+    return {**profile_to_dict(profile), "system_prompt": render_system_prompt(profile)}
 
 
 @router.put("/agents/{key}", tags=["agents"])
@@ -112,6 +123,10 @@ async def upsert_agent(key: str, body: AgentProfileIn, request: Request) -> dict
     fields = body.model_dump(exclude_none=True)
     fields["key"] = key
     profile = AgentProfile(**fields)
+    # Persist before applying, so a database failure surfaces as a failed save
+    # rather than a profile that works until the next restart.
+    if services.profile_store is not None:
+        await services.profile_store.save(profile)
     services.profiles[key] = profile
     log.info("agent profile saved", extra={"agent": key})
     return {"key": key, "system_prompt": render_system_prompt(profile)}
@@ -121,7 +136,10 @@ async def upsert_agent(key: str, body: AgentProfileIn, request: Request) -> dict
 async def delete_agent(key: str, request: Request) -> dict[str, str]:
     if key == "default":
         raise HTTPException(400, "The default profile cannot be deleted")
-    request.app.state.services.profiles.pop(key, None)
+    services = request.app.state.services
+    if services.profile_store is not None:
+        await services.profile_store.delete(key)
+    services.profiles.pop(key, None)
     return {"status": "deleted"}
 
 

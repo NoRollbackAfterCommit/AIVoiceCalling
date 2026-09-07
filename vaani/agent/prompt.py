@@ -13,7 +13,9 @@ phone line.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, field, fields
+from typing import Any
 
 
 @dataclass(slots=True)
@@ -69,6 +71,20 @@ class AgentProfile:
         ]
     )
     max_tool_iterations: int = 4
+
+
+_PROFILE_FIELDS = frozenset(f.name for f in fields(AgentProfile))
+
+
+def profile_to_dict(profile: AgentProfile) -> dict[str, Any]:
+    return asdict(profile)
+
+
+def profile_from_dict(data: Mapping[str, Any]) -> AgentProfile:
+    """Tolerant on purpose. A payload written by an older release lacks the
+    fields added since; one written by a newer release carries fields this one
+    does not know. A saved profile has to load across both."""
+    return AgentProfile(**{k: v for k, v in data.items() if k in _PROFILE_FIELDS})
 
 
 VOICE_RULES = """\

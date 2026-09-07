@@ -1,8 +1,9 @@
 """Durable call records.
 
 For a government deployment the transcript and its timings are the audit trail,
-so they outlive the process. Deliberately two flat tables and no migrations:
-phase 1 runs on SQLite at pilot scale, and Alembic arrives with Postgres.
+so they outlive the process. Flat tables, upgraded by Alembic at boot (see
+migrate.py). Agent profiles live here too, so one backup carries both the calls
+and the behaviour they ran under.
 """
 
 from __future__ import annotations
@@ -50,3 +51,14 @@ class TurnRow(Base):
     tts_first_chunk_ms: Mapped[int] = mapped_column(Integer, default=0)
     total_ms: Mapped[int] = mapped_column(Integer, default=0)
     barged_in: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class AgentProfileRow(Base):
+    __tablename__ = "agent_profiles"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # The whole profile as JSON rather than a column per field: the profile
+    # gains a field most releases, it is read whole and never queried by field,
+    # and a column each would mean a migration each.
+    payload: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[float] = mapped_column(Float)

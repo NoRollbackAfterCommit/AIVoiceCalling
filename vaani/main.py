@@ -19,6 +19,7 @@ from vaani.api import telephony as telephony_api
 from vaani.config import Settings, get_settings
 from vaani.core.logging import configure_logging, get_logger
 from vaani.core.registry import build_services
+from vaani.db.profiles import ProfileRepository
 from vaani.db.repository import CallRepository
 from vaani.pipeline.manager import CallManager
 from vaani.pipeline.monitor import MonitorHub
@@ -42,6 +43,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     repository = CallRepository(settings.database_url)
     await repository.start()
     services.calls = repository
+    services.profile_store = ProfileRepository(repository.sessions)
+    # Saved profiles over the built-in default, the way persisted settings layer
+    # over the environment: what boots is what the operator last saved.
+    services.profiles.update(await services.profile_store.load())
     services.monitor = MonitorHub()
     retention = asyncio.create_task(_enforce_retention(repository, settings), name="retention")
     await services.start()

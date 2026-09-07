@@ -51,6 +51,11 @@ class CallRepository:
         self._writer = asyncio.create_task(self._drain(), name="call-writer")
         log.info("call repository ready")
 
+    @property
+    def sessions(self) -> Any:
+        """The session factory, for the other repositories on this database."""
+        return self._sessions
+
     # -- write ---------------------------------------------------------------
 
     async def create_call(self, record: Any) -> None:
