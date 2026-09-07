@@ -130,6 +130,25 @@ class CallRecord:
         }
 
 
+def _knowledge_searches(tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """What the knowledge base was asked, and what it returned.
+
+    Only successful searches count: a search that found nothing already surfaces
+    through the knowledge-gaps report, and recording it here as an empty row
+    would read as "the right document scored zero" when the truth is "no
+    document was consulted at all".
+    """
+    return [
+        {
+            "query": str((call.get("arguments") or {}).get("query", "")),
+            "sources": list((call.get("data") or {}).get("sources", [])),
+            "scores": list((call.get("data") or {}).get("scores", [])),
+        }
+        for call in tool_calls
+        if call.get("name") == "search_knowledge" and call.get("ok") and call.get("data")
+    ]
+
+
 class _MonitoredTransport:
     """Passes everything through, mirroring events to supervisors.
 
@@ -453,6 +472,13 @@ class CallSession:
                 "tools": [t["name"] for t in turn.tool_calls],
             },
         )
+        # Which passages informed this answer, visible per turn: without it,
+        # "the agent ignored our training data" and "the wrong document won" are
+        # indistinguishable from the outside.
+        searches = _knowledge_searches(turn.tool_calls)
+        for search in searches:
+            await self._transport.send_event({"type": "retrieval", **search})
+
         await self._transport.send_event({"type": "transcript", "role": "agent", "text": turn.text})
 
         # 3. Speak
@@ -467,6 +493,7 @@ class CallSession:
             transcript.language,
             metrics,
             tools=[t["name"] for t in turn.tool_calls],
+            retrieval=searches,
         )
         retrieved = any(t["name"] == "search_knowledge" for t in turn.tool_calls)
         self._progress.observe(
@@ -543,6 +570,7 @@ class CallSession:
         detected: str | None,
         metrics: TurnMetrics,
         tools: list[str] | None = None,
+        retrieval: list[dict[str, Any]] | None = None,
     ) -> None:
         """One exchange, into the in-memory record and the database together.
 
@@ -556,6 +584,7 @@ class CallSession:
                 "agent": agent,
                 "language": detected,
                 "tools": tools or [],
+                "retrieval": retrieval or [],
                 "metrics": asdict(metrics),
             }
         )

@@ -1,4 +1,5 @@
-"""The supervisor feed: hub fan-out and the transport tap.
+"""The supervisor feed: hub fan-out, the transport tap, and what a turn records
+about retrieval.
 
 The contract that matters is the one that keeps monitoring harmless: watching a
 call must never slow it down. A supervisor who cannot keep up loses events; the
@@ -9,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 
-from tests.test_pipeline import FakeTransport
+from tests.test_pipeline import FakeTransport, silence, tone
 from vaani.pipeline.manager import CallManager
 from vaani.pipeline.monitor import _QUEUE_MAX, MonitorHub
 from vaani.pipeline.session import CallSession, _MonitoredTransport
@@ -82,6 +83,57 @@ def test_monitor_endpoint_is_routed():
 
 def test_manager_exposes_capacity():
     assert CallManager(max_concurrent=7).capacity == 7
+
+
+# ---------------------------------------------------------------------------
+# Retrieval observability
+# ---------------------------------------------------------------------------
+
+
+def test_failed_searches_are_not_recorded():
+    from vaani.pipeline.session import _knowledge_searches
+
+    calls = [
+        {
+            "name": "search_knowledge",
+            "arguments": {"query": "bill due date"},
+            "ok": True,
+            "data": {"sources": ["faq"], "scores": [0.8]},
+        },
+        {"name": "search_knowledge", "arguments": {"query": "nothing"}, "ok": False, "data": None},
+        {"name": "end_call", "arguments": {}, "ok": True, "data": {}},
+    ]
+    assert _knowledge_searches(calls) == [
+        {"query": "bill due date", "sources": ["faq"], "scores": [0.8]}
+    ]
+
+
+async def test_turn_records_what_was_retrieved(services):
+    await services.retriever.index_text(
+        "You can check your electricity bill online. Electricity bills are due "
+        "on the fifteenth of every month.",
+        source="billing-faq",
+    )
+    transport = FakeTransport()
+    session = CallSession(transport, services)
+    task = asyncio.create_task(session.run())
+    await asyncio.sleep(0.25)
+
+    # MockSTT's first scripted line asks about an electricity bill, which makes
+    # MockLLM call search_knowledge — the same path a real call takes.
+    await session.push_audio(tone(700))
+    await session.push_audio(silence(500))
+    await asyncio.sleep(0.8)
+
+    await session.hangup("test_complete")
+    record = await asyncio.wait_for(task, timeout=5)
+
+    turn = record.turns[0]
+    assert turn["retrieval"], "a turn that searched must record what came back"
+    assert "billing-faq" in turn["retrieval"][0]["sources"]
+
+    events = [e for e in transport.events if e.get("type") == "retrieval"]
+    assert events and "billing-faq" in events[0]["sources"]
 
 
 async def test_supervisor_sees_call_events(services):
