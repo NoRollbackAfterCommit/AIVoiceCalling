@@ -258,10 +258,10 @@ before.
 
 ### Known limitations
 
-- **Nothing is persisted.** Agent profiles, call records and the in-memory vector
-  store all live in process memory and are lost on restart. Only call recordings
-  reach disk. `vaani/db/` is an empty placeholder — SQLAlchemy is declared as a
-  dependency but no models or migrations exist yet.
+- **Agent profiles are not persisted.** Calls and turns are durable (SQLite by
+  default, Postgres with `[prod]`, migrations at boot, retention enforced), and
+  the vector store survives restarts when it is Qdrant. Profiles edited through
+  the API still live in process memory and reset on restart.
 - `MemoryVectorStore` is a brute-force scan. Correct and fast to a few thousand
   chunks; use Qdrant beyond that.
 - No authentication on the API. Do not expose this to a network before phase 6.
