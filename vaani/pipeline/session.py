@@ -41,7 +41,12 @@ from vaani.audio.vad import BargeInDetector, TurnDetector, iter_frames
 from vaani.config import FRAME_BYTES, SAMPLE_RATE, Settings
 from vaani.core.logging import call_id_var, get_logger
 from vaani.core.registry import Services
-from vaani.pipeline.language import LanguageTracker, detect_choice
+from vaani.pipeline.language import (
+    LanguageTracker,
+    detect_choice,
+    detect_switch_request,
+    drift_qualifies,
+)
 from vaani.pipeline.progress import ProgressTracker
 from vaani.providers.base import Transcript
 
@@ -348,9 +353,7 @@ class CallSession:
             if previous and not previous.done():
                 previous.cancel()
                 log.info("superseded an in-flight turn")
-            self._turn_task = asyncio.create_task(
-                self._process_turn(event.audio, event.duration_s)
-            )
+            self._turn_task = asyncio.create_task(self._process_turn(event.audio, event.duration_s))
 
     async def _process_turn(self, audio: bytes, audio_s: float) -> None:
         metrics = TurnMetrics(audio_s=round(audio_s, 2))
@@ -386,15 +389,9 @@ class CallSession:
             self.record.languages.add(transcript.language)
             self._tool_ctx.language = transcript.language
 
-        # Hysteresis lives in the tracker: one mis-detected utterance must not
-        # flip the agent's voice mid-call.
-        self._language.observe(transcript.language)
-        self.record.language = self._language.current
-
         log.info(
             "caller",
-            extra={"text": transcript.text, "lang": transcript.language,
-                   "stt_ms": metrics.stt_ms},
+            extra={"text": transcript.text, "lang": transcript.language, "stt_ms": metrics.stt_ms},
         )
         await self._transport.send_event(
             {
@@ -404,6 +401,13 @@ class CallSession:
                 "language": transcript.language,
             }
         )
+
+        # The caller may be asking for another language, or may simply have
+        # carried on in one. Either has to land before the model is asked, or the
+        # answer comes back in the language they are trying to leave.
+        if await self._maybe_switch_language(transcript):
+            return
+        self.record.language = self._language.current
 
         # 2. Think
         t0 = time.monotonic()
@@ -415,12 +419,13 @@ class CallSession:
 
         log.info(
             "agent",
-            extra={"text": turn.text, "agent_ms": metrics.agent_ms,
-                   "tools": [t["name"] for t in turn.tool_calls]},
+            extra={
+                "text": turn.text,
+                "agent_ms": metrics.agent_ms,
+                "tools": [t["name"] for t in turn.tool_calls],
+            },
         )
-        await self._transport.send_event(
-            {"type": "transcript", "role": "agent", "text": turn.text}
-        )
+        await self._transport.send_event({"type": "transcript", "role": "agent", "text": turn.text})
 
         # 3. Speak
         if turn.text:
@@ -428,14 +433,12 @@ class CallSession:
         metrics.total_ms = int((time.monotonic() - turn_started) * 1000)
         metrics.barged_in = self.state == CallState.LISTENING and turn.text != ""
 
-        self.record.turns.append(
-            {
-                "caller": transcript.text,
-                "agent": turn.text,
-                "language": transcript.language,
-                "tools": [t["name"] for t in turn.tool_calls],
-                "metrics": asdict(metrics),
-            }
+        self._record_turn(
+            transcript.text,
+            turn.text,
+            transcript.language,
+            metrics,
+            tools=[t["name"] for t in turn.tool_calls],
         )
         retrieved = any(t["name"] == "search_knowledge" for t in turn.tool_calls)
         self._progress.observe(
@@ -456,17 +459,6 @@ class CallSession:
                 "answer it again. Apologise briefly and offer them a concrete "
                 "choice: register a complaint with a reference number, arrange a "
                 "callback, or transfer to an officer. Ask which they would like."
-            )
-
-        if self._services.calls is not None:
-            # Queued, not awaited: persistence must never sit on the turn loop.
-            index = len(self.record.turns) - 1
-            language = self._language.current
-            self._services.calls.append_turn(
-                self.call_id, index * 2, "caller", transcript.text, language, asdict(metrics)
-            )
-            self._services.calls.append_turn(
-                self.call_id, index * 2 + 1, "agent", turn.text, language, asdict(metrics)
             )
 
         await self._transport.send_event({"type": "metrics", **asdict(metrics)})
@@ -516,6 +508,41 @@ class CallSession:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
 
+    def _record_turn(
+        self,
+        caller: str,
+        agent: str,
+        detected: str | None,
+        metrics: TurnMetrics,
+        tools: list[str] | None = None,
+    ) -> None:
+        """One exchange, into the in-memory record and the database together.
+
+        `detected` is the language the recogniser heard; the stored language is
+        the one the agent is speaking. They differ exactly when the caller is
+        mid-switch, and both are worth keeping.
+        """
+        self.record.turns.append(
+            {
+                "caller": caller,
+                "agent": agent,
+                "language": detected,
+                "tools": tools or [],
+                "metrics": asdict(metrics),
+            }
+        )
+        if self._services.calls is None:
+            return
+        # Queued, not awaited: persistence must never sit on the turn loop.
+        index = len(self.record.turns) - 1
+        language = self._language.current
+        self._services.calls.append_turn(
+            self.call_id, index * 2, "caller", caller, language, asdict(metrics)
+        )
+        self._services.calls.append_turn(
+            self.call_id, index * 2 + 1, "agent", agent, language, asdict(metrics)
+        )
+
     # -- language selection -------------------------------------------------
 
     async def _settle_language(self, transcript: Transcript) -> None:
@@ -531,6 +558,7 @@ class CallSession:
         # English back after asking for something else.
         allowed = {code for code in self._profile.voices if code in CONFIRMATIONS}
         choice = detect_choice(transcript.text, transcript.language, allowed=allowed or None)
+        settled = False
         if choice is not None and allowed and choice not in allowed:
             choice = None
 
@@ -552,8 +580,12 @@ class CallSession:
                 return
             choice = "en-IN" if "en-IN" in (allowed or {"en-IN"}) else self._language.current
             log.info("language still unclear, defaulting", extra={"language": choice})
+            # Nobody picked this. Marking it provisional is what lets the caller
+            # out of it later on a single clear turn, instead of being stranded
+            # in a language they never asked for because a door slammed twice.
+            settled = True
 
-        self._language.lock(choice)
+        self._language.lock(choice, provisional=settled)
         self._awaiting_language = False
         self.record.language = choice
         self._tool_ctx.language = choice
@@ -563,11 +595,73 @@ class CallSession:
         await self._stop_hold()
         # Confirm in the chosen language, so the caller hears immediately that it
         # worked rather than taking it on trust.
-        await self._speak(
-            CONFIRMATIONS.get(choice, self._profile.greeting), kind="greeting"
-        )
+        await self._speak(CONFIRMATIONS.get(choice, self._profile.greeting), kind="greeting")
         if self.state != CallState.ENDED:
             self._set_state(CallState.LISTENING)
+
+    async def _maybe_switch_language(self, transcript: Transcript) -> bool:
+        """Let the caller change language after the choice has been made.
+
+        Returns True when the turn ends here — a bare "Bengali please" is not a
+        question for the model, and sending it on would produce an answer to
+        nothing.
+
+        Two ways in, because callers arrive by both. Some ask, in which case a
+        speaking verb next to a language name is the signal. Most do not: they
+        never learn the phrase and simply keep talking in their own language,
+        which is exactly what happens when the opening question was answered into
+        noise and something had to be settled on. The second route is what makes
+        that recoverable at all.
+        """
+        if not self._language.locked:
+            # Nothing chosen yet, so ordinary hysteresis applies: one
+            # mis-detected utterance must not flip the agent's voice.
+            self._language.observe(transcript.language)
+            return False
+
+        # Without a voice and a confirmation line a switch leaves the caller
+        # listening to silence, which is worse than the wrong language.
+        allowed = {code for code in self._profile.voices if code in CONFIRMATIONS}
+        if not allowed:
+            return False
+
+        previous = self._language.current
+        request = detect_switch_request(transcript.text, allowed=allowed)
+        if request is not None and request.language != previous:
+            await self._switch_language(request.language, previous=previous, explicit=True)
+            if request.carries_question:
+                # They asked something real in the same breath. Answering it in
+                # the new language confirms the switch better than a canned line,
+                # and does not make them say it twice.
+                return False
+            confirmation = CONFIRMATIONS[request.language]
+            await self._speak(confirmation, kind="greeting")
+            self._record_turn(transcript.text, confirmation, transcript.language, TurnMetrics())
+            if self.state != CallState.ENDED:
+                self._set_state(CallState.LISTENING)
+            return True
+
+        if drift_qualifies(transcript.text, transcript.confidence):
+            moved = self._language.observe_drift(transcript.language)
+            if moved is not None:
+                # No confirmation line here: they asked a question in their own
+                # language, and an answer in it says the same thing better.
+                await self._switch_language(moved, previous=previous, explicit=False)
+        return False
+
+    async def _switch_language(self, language: str, *, previous: str, explicit: bool) -> None:
+        self._language.lock(language)
+        self.record.language = language
+        self._tool_ctx.language = language
+        # Rebuilt rather than appended to, for the same reason as the initial
+        # choice: a late instruction competing with the original is how models
+        # drift back to the language they saw first.
+        self._agent.set_language(language)
+        log.info(
+            "language changed mid-call",
+            extra={"previous": previous, "current": language, "explicit": explicit},
+        )
+        await self._transport.send_event({"type": "language", "language": language})
 
     # -- speaking -----------------------------------------------------------
 
@@ -604,9 +698,7 @@ class CallSession:
             first = True
             voice = self._language.voice() or self._profile.voice
             try:
-                async for chunk in self._services.tts.stream(
-                    text, voice=voice
-                ):
+                async for chunk in self._services.tts.stream(text, voice=voice):
                     if not chunk:
                         continue
                     if first:
@@ -702,9 +794,7 @@ class CallSession:
                 if not self._idle_prompted and idle > self._settings.idle_prompt_after_s:
                     self._idle_prompted = True
                     await self._speak(
-                        IDLE_PROMPTS.get(
-                            self._language.current, IDLE_PROMPTS["en-IN"]
-                        ),
+                        IDLE_PROMPTS.get(self._language.current, IDLE_PROMPTS["en-IN"]),
                         kind="idle_prompt",
                     )
                 elif idle > self._settings.idle_hangup_after_s:
@@ -739,9 +829,7 @@ class CallSession:
         if self.record.disposition is None:
             # Nothing recorded an outcome, which means the caller left before the
             # agent could. Only the platform knows why.
-            self.record.disposition = PLATFORM_FOR_OUTCOME.get(
-                self.record.outcome, "unresolved"
-            )
+            self.record.disposition = PLATFORM_FOR_OUTCOME.get(self.record.outcome, "unresolved")
 
         if self._services.calls is not None:
             # Best effort: a storage failure must not turn a completed call into
@@ -757,9 +845,7 @@ class CallSession:
             },
         )
         with contextlib.suppress(Exception):
-            await self._transport.send_event(
-                {"type": "call_end", "record": self.record.to_dict()}
-            )
+            await self._transport.send_event({"type": "call_end", "record": self.record.to_dict()})
         with contextlib.suppress(Exception):
             await self._transport.close()
 
