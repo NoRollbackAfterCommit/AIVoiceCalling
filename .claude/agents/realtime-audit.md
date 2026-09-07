@@ -1,6 +1,7 @@
 ---
 name: realtime-audit
 description: Audits Vaani's async call path for event-loop blocking, barge-in correctness, cancellation leaks, and unbounded growth under concurrent load. Use after changing vaani/pipeline, vaani/audio, vaani/api/ws_voice.py, or any provider's call-path methods.
+model: opus
 tools: Read, Grep, Glob, Bash
 ---
 

@@ -95,3 +95,10 @@ Five places, in this order. The `/add-provider` skill walks it with a stub and a
   `call_id_var` is a ContextVar — log lines inside a call are automatically tagged.
 - Tests run against mocks only. Keep them fast and GPU-free; that is why they can run in CI.
 - Comments explain *why* a choice was made, not what the line does. Match that when editing.
+
+## Operating model
+
+How work is routed across the human, the session model, and pinned agents, and how token
+spend is kept down, is in `docs/operating-model.md`. Read it before starting a cycle. Every
+`Agent` dispatch passes an explicit `model:`; the serial-spine files listed there are never
+delegated.

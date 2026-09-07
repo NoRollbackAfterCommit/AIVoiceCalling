@@ -1,6 +1,7 @@
 ---
 name: test-writer
 description: Writes fast, GPU-free pytest coverage for Vaani against the mock providers — turn detection, barge-in timing, agent behaviour, RAG chunking, settings reload. Use when adding tests for new or untested modules.
+model: sonnet
 tools: Read, Grep, Glob, Edit, Write, Bash
 ---
 
