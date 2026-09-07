@@ -79,31 +79,43 @@ class Settings(BaseSettings):
 
     # ---- service ----------------------------------------------------------
     env: Literal["dev", "staging", "prod"] = cfg(
-        "dev", group="Service", label="Environment",
+        "dev",
+        group="Service",
+        label="Environment",
         options=_opts(("dev", "Development"), ("staging", "Staging"), ("prod", "Production")),
     )
     host: str = cfg("0.0.0.0", group="Service", label="Bind address")
     port: int = cfg(8080, group="Service", label="Port", ge=1, le=65535)
     log_level: str = cfg(
-        "INFO", group="Service", label="Log level", restart=False,
-        options=_opts(("DEBUG", "DEBUG"), ("INFO", "INFO"), ("WARNING", "WARNING"),
-                      ("ERROR", "ERROR")),
+        "INFO",
+        group="Service",
+        label="Log level",
+        restart=False,
+        options=_opts(
+            ("DEBUG", "DEBUG"), ("INFO", "INFO"), ("WARNING", "WARNING"), ("ERROR", "ERROR")
+        ),
     )
     cors_origins: str = cfg(
-        "*", group="Service", label="CORS origins",
+        "*",
+        group="Service",
+        label="CORS origins",
         help="Comma separated. '*' is fine for a dev box, never for production.",
     )
 
     # ---- persistence ------------------------------------------------------
     database_url: str = cfg(
-        "sqlite+aiosqlite:///./data/vaani.db", group="Service", label="Database URL",
+        "sqlite+aiosqlite:///./data/vaani.db",
+        group="Service",
+        label="Database URL",
         help="SQLite by default so the platform runs with nothing else installed.",
     )
     redis_url: str | None = cfg(None, group="Service", label="Redis URL")
 
     # ---- speech to text ---------------------------------------------------
     stt_provider: Literal["mock", "faster_whisper", "openai", "sarvam"] = cfg(
-        "mock", group="Speech to text", label="Provider",
+        "mock",
+        group="Speech to text",
+        label="Provider",
         options=_opts(
             ("mock", "Mock — no model, for development"),
             ("faster_whisper", "Faster-Whisper — self-hosted, offline"),
@@ -112,40 +124,55 @@ class Settings(BaseSettings):
         ),
     )
     stt_model: str = cfg(
-        "small", group="Speech to text", label="Model",
+        "small",
+        group="Speech to text",
+        label="Model",
         help="Self-hosted: tiny | base | small | medium | large-v3. "
-             "OpenAI: whisper-1 | gpt-4o-transcribe.",
+        "OpenAI: whisper-1 | gpt-4o-transcribe.",
         depends_on={"stt_provider": ["faster_whisper", "openai"]},
     )
     stt_device: Literal["auto", "cpu", "cuda"] = cfg(
-        "auto", group="Speech to text", label="Device",
+        "auto",
+        group="Speech to text",
+        label="Device",
         options=_opts(("auto", "Auto-detect"), ("cpu", "CPU"), ("cuda", "NVIDIA GPU")),
         depends_on={"stt_provider": ["faster_whisper"]},
     )
     stt_compute_type: str = cfg(
-        "default", group="Speech to text", label="Compute type",
+        "default",
+        group="Speech to text",
+        label="Compute type",
         help="int8 (CPU) | float16 (GPU) | default (pick automatically).",
         depends_on={"stt_provider": ["faster_whisper"]},
     )
     stt_language: str | None = cfg(
-        None, group="Speech to text", label="Force language",
+        None,
+        group="Speech to text",
+        label="Force language",
         help="Leave blank to auto-detect the language on every utterance.",
     )
     sarvam_api_key: str | None = cfg(
-        None, group="Speech to text", label="Sarvam API key", secret=True,
+        None,
+        group="Speech to text",
+        label="Sarvam API key",
+        secret=True,
         help="One key covers both Saarika speech recognition and Bulbul speech "
-             "synthesis. Sarvam hosts in India, which is what makes it usable on "
-             "a deployment with data residency obligations.",
+        "synthesis. Sarvam hosts in India, which is what makes it usable on "
+        "a deployment with data residency obligations.",
         depends_on={"stt_provider": ["sarvam"], "tts_provider": ["sarvam"]},
     )
     sarvam_stt_model: str = cfg(
-        "saaras:v3", group="Speech to text", label="Saarika model",
+        "saaras:v3",
+        group="Speech to text",
+        label="Saarika model",
         depends_on={"stt_provider": ["sarvam"]},
     )
 
     # ---- large language model --------------------------------------------
     llm_provider: Literal["mock", "openai_compat", "anthropic", "openai"] = cfg(
-        "mock", group="Language model", label="Provider",
+        "mock",
+        group="Language model",
+        label="Provider",
         options=_opts(
             ("mock", "Mock — rule based, for development"),
             ("openai_compat", "Self-hosted — vLLM / Ollama / llama.cpp"),
@@ -153,29 +180,38 @@ class Settings(BaseSettings):
             ("openai", "OpenAI — hosted"),
         ),
         help="Self-hosted keeps the deployment air-gapped. The hosted options send "
-             "call transcripts to a third party — check this is permitted before "
-             "enabling it on a government or healthcare deployment.",
+        "call transcripts to a third party — check this is permitted before "
+        "enabling it on a government or healthcare deployment.",
     )
 
     # -- self-hosted (OpenAI-compatible servers)
     llm_base_url: str = cfg(
-        "http://localhost:11434/v1", group="Language model", label="Server URL",
+        "http://localhost:11434/v1",
+        group="Language model",
+        label="Server URL",
         help="Ollama: http://localhost:11434/v1 · vLLM: http://localhost:8000/v1",
         depends_on={"llm_provider": ["openai_compat"]},
     )
     llm_model: str = cfg(
-        "qwen2.5:7b-instruct", group="Language model", label="Model",
+        "qwen2.5:7b-instruct",
+        group="Language model",
+        label="Model",
         depends_on={"llm_provider": ["openai_compat"]},
     )
 
     # -- Anthropic
     anthropic_api_key: str | None = cfg(
-        None, group="Language model", label="Anthropic API key", secret=True,
+        None,
+        group="Language model",
+        label="Anthropic API key",
+        secret=True,
         help="Starts with sk-ant-. Stored on this server only, never returned by the API.",
         depends_on={"llm_provider": ["anthropic"]},
     )
     anthropic_model: str = cfg(
-        "claude-opus-5", group="Language model", label="Claude model",
+        "claude-opus-5",
+        group="Language model",
+        label="Claude model",
         options=_opts(
             ("claude-opus-5", "Claude Opus 5 — most capable"),
             ("claude-sonnet-5", "Claude Sonnet 5 — balanced"),
@@ -184,56 +220,90 @@ class Settings(BaseSettings):
             ("claude-fable-5", "Claude Fable 5 — deepest reasoning"),
         ),
         help="On a live phone call latency is the product. Haiku 4.5 answers "
-             "fastest; Opus 5 reasons best but adds noticeable silence per turn.",
+        "fastest; Opus 5 reasons best but adds noticeable silence per turn.",
         depends_on={"llm_provider": ["anthropic"]},
     )
     anthropic_effort: Literal["low", "medium", "high", "xhigh", "max"] = cfg(
-        "low", group="Language model", label="Reasoning effort",
-        options=_opts(("low", "Low — fastest, best for live calls"),
-                      ("medium", "Medium"), ("high", "High"),
-                      ("xhigh", "Extra high"), ("max", "Maximum — slowest")),
+        "low",
+        group="Language model",
+        label="Reasoning effort",
+        options=_opts(
+            ("low", "Low — fastest, best for live calls"),
+            ("medium", "Medium"),
+            ("high", "High"),
+            ("xhigh", "Extra high"),
+            ("max", "Maximum — slowest"),
+        ),
         help="Controls how long Claude thinks before answering. Low is the right "
-             "default for telephony; raise it only for non-realtime workflows.",
+        "default for telephony; raise it only for non-realtime workflows.",
         depends_on={"llm_provider": ["anthropic"]},
     )
 
     # -- OpenAI
     openai_api_key: str | None = cfg(
-        None, group="Language model", label="OpenAI API key", secret=True,
+        None,
+        group="Language model",
+        label="OpenAI API key",
+        secret=True,
         help="Starts with sk-. Also used by the OpenAI speech and voice providers.",
-        depends_on={"llm_provider": ["openai"], "stt_provider": ["openai"],
-                    "tts_provider": ["openai"]},
+        depends_on={
+            "llm_provider": ["openai"],
+            "stt_provider": ["openai"],
+            "tts_provider": ["openai"],
+        },
     )
     openai_model: str = cfg(
-        "gpt-4o", group="Language model", label="OpenAI model",
-        options=_opts(("gpt-4o", "GPT-4o"), ("gpt-4o-mini", "GPT-4o mini — fastest"),
-                      ("gpt-4.1", "GPT-4.1"), ("gpt-4.1-mini", "GPT-4.1 mini")),
+        "gpt-4o",
+        group="Language model",
+        label="OpenAI model",
+        options=_opts(
+            ("gpt-4o", "GPT-4o"),
+            ("gpt-4o-mini", "GPT-4o mini — fastest"),
+            ("gpt-4.1", "GPT-4.1"),
+            ("gpt-4.1-mini", "GPT-4.1 mini"),
+        ),
         depends_on={"llm_provider": ["openai"]},
     )
     openai_base_url: str = cfg(
-        "https://api.openai.com/v1", group="Language model", label="OpenAI base URL",
+        "https://api.openai.com/v1",
+        group="Language model",
+        label="OpenAI base URL",
         help="Change only for an Azure OpenAI or proxy endpoint.",
         depends_on={"llm_provider": ["openai"]},
     )
 
     # -- shared generation controls
     llm_temperature: float = cfg(
-        0.3, group="Language model", label="Temperature", ge=0.0, le=2.0,
+        0.3,
+        group="Language model",
+        label="Temperature",
+        ge=0.0,
+        le=2.0,
         help="Ignored by current Claude models, which reject sampling parameters "
-             "outright — steer their tone through the agent prompt instead.",
+        "outright — steer their tone through the agent prompt instead.",
     )
     llm_max_tokens: int = cfg(
-        512, group="Language model", label="Max reply tokens", ge=32, le=8192,
+        512,
+        group="Language model",
+        label="Max reply tokens",
+        ge=32,
+        le=8192,
         help="A spoken reply is one to three sentences; a large value here only "
-             "buys the model room to ramble.",
+        "buys the model room to ramble.",
     )
     llm_timeout_s: float = cfg(
-        30.0, group="Language model", label="Request timeout (s)", ge=1.0, le=300.0,
+        30.0,
+        group="Language model",
+        label="Request timeout (s)",
+        ge=1.0,
+        le=300.0,
     )
 
     # ---- text to speech ---------------------------------------------------
     tts_provider: Literal["mock", "piper", "openai", "sarvam"] = cfg(
-        "mock", group="Text to speech", label="Provider",
+        "mock",
+        group="Text to speech",
+        label="Provider",
         options=_opts(
             ("mock", "Mock — tone generator, for development"),
             ("piper", "Piper — self-hosted, offline"),
@@ -242,52 +312,76 @@ class Settings(BaseSettings):
         ),
     )
     sarvam_tts_model: str = cfg(
-        "bulbul:v3", group="Text to speech", label="Bulbul model",
+        "bulbul:v3",
+        group="Text to speech",
+        label="Bulbul model",
         depends_on={"tts_provider": ["sarvam"]},
     )
     sarvam_voice: str = cfg(
-        "hi-IN:priya", group="Text to speech", label="Sarvam voice",
+        "hi-IN:priya",
+        group="Text to speech",
+        label="Sarvam voice",
         help="Written as language:speaker, for example hi-IN:priya or "
-             "bn-IN:ritu. The language half selects pronunciation. Speakers are "
-             "model-specific and the API rejects a mismatch outright — bulbul:v3 "
-             "accepts aditya, ritu, ashutosh, priya, neha, rahul, pooja, rohan, "
-             "simran, kavya, amit, dev, ishita, shreya and others.",
+        "bn-IN:ritu. The language half selects pronunciation. Speakers are "
+        "model-specific and the API rejects a mismatch outright — bulbul:v3 "
+        "accepts aditya, ritu, ashutosh, priya, neha, rahul, pooja, rohan, "
+        "simran, kavya, amit, dev, ishita, shreya and others.",
         depends_on={"tts_provider": ["sarvam"]},
     )
     tts_voice: str = cfg(
-        "en_US-lessac-medium", group="Text to speech", label="Voice",
+        "en_US-lessac-medium",
+        group="Text to speech",
+        label="Voice",
         help="Piper: a voice name under the voices directory. "
-             "OpenAI: alloy | echo | fable | onyx | nova | shimmer.",
+        "OpenAI: alloy | echo | fable | onyx | nova | shimmer.",
     )
     tts_voices_dir: str = cfg(
-        "./models/piper", group="Text to speech", label="Piper voices directory",
+        "./models/piper",
+        group="Text to speech",
+        label="Piper voices directory",
         depends_on={"tts_provider": ["piper"]},
     )
     tts_speed: float = cfg(
-        1.0, group="Text to speech", label="Speaking rate", ge=0.5, le=2.0,
+        1.0,
+        group="Text to speech",
+        label="Speaking rate",
+        ge=0.5,
+        le=2.0,
     )
     tts_model: str = cfg(
-        "tts-1", group="Text to speech", label="OpenAI speech model",
+        "tts-1",
+        group="Text to speech",
+        label="OpenAI speech model",
         options=_opts(("tts-1", "tts-1 — lowest latency"), ("tts-1-hd", "tts-1-hd")),
         depends_on={"tts_provider": ["openai"]},
     )
 
     # ---- retrieval --------------------------------------------------------
     vector_store: Literal["memory", "qdrant"] = cfg(
-        "memory", group="Knowledge", label="Vector store",
-        options=_opts(("memory", "In-memory — no infrastructure"),
-                      ("qdrant", "Qdrant — persistent, scalable")),
+        "memory",
+        group="Knowledge",
+        label="Vector store",
+        options=_opts(
+            ("memory", "In-memory — no infrastructure"), ("qdrant", "Qdrant — persistent, scalable")
+        ),
     )
     qdrant_url: str = cfg(
-        "http://localhost:6333", group="Knowledge", label="Qdrant URL",
+        "http://localhost:6333",
+        group="Knowledge",
+        label="Qdrant URL",
         depends_on={"vector_store": ["qdrant"]},
     )
     qdrant_api_key: str | None = cfg(
-        None, group="Knowledge", label="Qdrant API key", secret=True,
+        None,
+        group="Knowledge",
+        label="Qdrant API key",
+        secret=True,
         depends_on={"vector_store": ["qdrant"]},
     )
     embedding_provider: Literal["hash", "sentence_transformers", "openai"] = cfg(
-        "hash", group="Knowledge", label="Embeddings",
+        "hash",
+        group="Knowledge",
+        label="Embeddings",
         options=_opts(
             ("hash", "Lexical hash — no model, development only"),
             ("sentence_transformers", "BGE / E5 — self-hosted"),
@@ -295,89 +389,168 @@ class Settings(BaseSettings):
         ),
     )
     embedding_model: str = cfg(
-        "BAAI/bge-m3", group="Knowledge", label="Embedding model",
+        "BAAI/bge-m3",
+        group="Knowledge",
+        label="Embedding model",
         help="Self-hosted: BAAI/bge-m3. OpenAI: text-embedding-3-small.",
         depends_on={"embedding_provider": ["sentence_transformers", "openai"]},
     )
     embedding_dim: int = cfg(
-        384, group="Knowledge", label="Embedding dimensions", ge=64, le=4096,
+        384,
+        group="Knowledge",
+        label="Embedding dimensions",
+        ge=64,
+        le=4096,
         depends_on={"embedding_provider": ["hash"]},
     )
     rag_top_k: int = cfg(
-        5, group="Knowledge", label="Passages per answer", ge=1, le=20, restart=False,
+        5,
+        group="Knowledge",
+        label="Passages per answer",
+        ge=1,
+        le=20,
+        restart=False,
         help="More passages means better recall and a longer, slower answer.",
     )
     rag_min_score: float = cfg(
-        0.25, group="Knowledge", label="Relevance threshold", ge=0.0, le=1.0,
+        0.25,
+        group="Knowledge",
+        label="Relevance threshold",
+        ge=0.0,
+        le=1.0,
         restart=False,
         help="An upper bound only — an embedding model whose scores sit on a lower "
-             "scale pulls this down to its own floor automatically.",
+        "scale pulls this down to its own floor automatically.",
     )
 
     # ---- conversation behaviour ------------------------------------------
     end_of_turn_silence_ms: int = cfg(
-        700, group="Conversation", label="End-of-turn silence (ms)", ge=200, le=3000,
+        700,
+        group="Conversation",
+        label="End-of-turn silence (ms)",
+        ge=200,
+        le=3000,
         restart=False,
         help="Trailing silence that ends the caller's turn. Too low interrupts "
-             "someone drawing breath; too high leaves a dead pause. 500-900 works.",
+        "someone drawing breath; too high leaves a dead pause. 500-900 works.",
     )
     barge_in_ms: int = cfg(
-        240, group="Conversation", label="Barge-in threshold (ms)", ge=80, le=1000,
+        240,
+        group="Conversation",
+        label="Barge-in threshold (ms)",
+        ge=80,
+        le=1000,
         restart=False,
         help="Continuous caller speech required to cut the agent off mid-sentence.",
     )
     playout_lead_ms: int = cfg(
-        300, group="Conversation", label="Playout lead (ms)", ge=0, le=2000,
+        300,
+        group="Conversation",
+        label="Playout lead (ms)",
+        ge=0,
+        le=2000,
         restart=False,
         help="How far ahead of real time agent audio may be sent. Enough slack that "
-             "a jittery line never starves, small enough that barge-in stays accurate.",
+        "a jittery line never starves, small enough that barge-in stays accurate.",
     )
     max_turn_audio_s: float = cfg(
-        30.0, group="Conversation", label="Max utterance (s)", ge=5.0, le=120.0,
+        30.0,
+        group="Conversation",
+        label="Max utterance (s)",
+        ge=5.0,
+        le=120.0,
         restart=False,
     )
     max_call_duration_s: float = cfg(
-        900.0, group="Conversation", label="Max call duration (s)", ge=30.0, le=7200.0,
+        900.0,
+        group="Conversation",
+        label="Max call duration (s)",
+        ge=30.0,
+        le=7200.0,
         restart=False,
     )
     max_concurrent_calls: int = cfg(
-        50, group="Conversation", label="Concurrent call limit", ge=1, le=1000,
+        50,
+        group="Conversation",
+        label="Concurrent call limit",
+        ge=1,
+        le=1000,
         help="GPU inference degrades catastrophically rather than gracefully, so "
-             "the caller past this limit gets a polite 'all lines busy'.",
+        "the caller past this limit gets a polite 'all lines busy'.",
     )
     idle_prompt_after_s: float = cfg(
-        30.0, group="Conversation", label="Prompt after silence (s)", ge=2.0, le=120.0,
+        30.0,
+        group="Conversation",
+        label="Prompt after silence (s)",
+        ge=2.0,
+        le=120.0,
         restart=False,
         help="Silence before the agent asks whether the caller is still there. "
-             "Measured from the moment the agent stops speaking, not from the "
-             "caller's last word. Below about twenty seconds it interrupts "
-             "people who are simply thinking, or reading a bill number off a "
-             "piece of paper, which callers find far more irritating than a "
-             "pause.",
+        "Measured from the moment the agent stops speaking, not from the "
+        "caller's last word. Below about twenty seconds it interrupts "
+        "people who are simply thinking, or reading a bill number off a "
+        "piece of paper, which callers find far more irritating than a "
+        "pause.",
     )
     idle_hangup_after_s: float = cfg(
-        90.0, group="Conversation", label="Hang up after silence (s)", ge=5.0, le=600.0,
+        90.0,
+        group="Conversation",
+        label="Hang up after silence (s)",
+        ge=5.0,
+        le=600.0,
         restart=False,
         help="Must be comfortably longer than the prompt above, or the call "
-             "ends before the caller has been asked anything.",
+        "ends before the caller has been asked anything.",
+    )
+
+    # ---- telephony --------------------------------------------------------
+    audiosocket_enabled: bool = cfg(
+        False,
+        group="Telephony",
+        label="Asterisk AudioSocket",
+        help="Accept calls handed over by Asterisk's AudioSocket() dialplan "
+        "application. Trunk and dialplan setup is in docs/telephony.md.",
+    )
+    audiosocket_host: str = cfg(
+        "0.0.0.0",
+        group="Telephony",
+        label="AudioSocket bind address",
+        help="The protocol is unauthenticated TCP, so the network is the access "
+        "control: bind to the interface Asterisk reaches, not the internet.",
+    )
+    audiosocket_port: int = cfg(
+        9092,
+        group="Telephony",
+        label="AudioSocket port",
+        ge=1024,
+        le=65535,
     )
 
     # ---- storage ----------------------------------------------------------
     recordings_dir: str = cfg(
-        "./data/recordings", group="Storage", label="Recordings directory",
+        "./data/recordings",
+        group="Storage",
+        label="Recordings directory",
         restart=False,
     )
     retention_days: int = cfg(
-        365, group="Storage", label="Retain records for (days)", ge=1, le=3650,
+        365,
+        group="Storage",
+        label="Retain records for (days)",
+        ge=1,
+        le=3650,
         restart=False,
         help="How long call records, transcripts and recordings are kept. "
-             "Declared now because a government deployment will be asked; "
-             "automatic deletion arrives with the Postgres migration.",
+        "Declared now because a government deployment will be asked; "
+        "automatic deletion arrives with the Postgres migration.",
     )
     record_calls: bool = cfg(
-        True, group="Storage", label="Record calls", restart=False,
+        True,
+        group="Storage",
+        label="Record calls",
+        restart=False,
         help="Recordings are the audit trail for a government deployment. Confirm "
-             "the caller notification requirements in your jurisdiction.",
+        "the caller notification requirements in your jurisdiction.",
     )
 
     @property

@@ -47,6 +47,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.services = services
     app.state.calls = CallManager(max_concurrent=settings.max_concurrent_calls)
 
+    telephony = None
+    if settings.audiosocket_enabled:
+        # Imported here, not at the top: most deployments only ever take web
+        # calls, and the bridge should cost them nothing.
+        from vaani.telephony.audiosocket import AudioSocketServer
+
+        telephony = AudioSocketServer(
+            services,
+            app.state.calls,
+            host=settings.audiosocket_host,
+            port=settings.audiosocket_port,
+            settings=settings,
+        )
+        await telephony.start()
+
     await _seed_knowledge(services)
 
     log.info("vaani ready", extra={"port": settings.port, "env": settings.env})
@@ -54,6 +69,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         log.info("shutting down")
+        if telephony is not None:
+            # Stop answering before draining, or Asterisk keeps handing over
+            # calls that will only ever hear the shutdown.
+            await telephony.stop()
         await app.state.calls.drain(timeout=15)
         retention.cancel()
         with contextlib.suppress(asyncio.CancelledError):

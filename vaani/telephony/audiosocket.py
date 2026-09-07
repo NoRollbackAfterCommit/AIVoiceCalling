@@ -79,9 +79,7 @@ class AudioSocketTransport:
                 frame = bytes(self._pending[:ASTERISK_FRAME_BYTES])
                 del self._pending[:ASTERISK_FRAME_BYTES]
                 try:
-                    self._writer.write(
-                        struct.pack(">BH", TYPE_AUDIO, len(frame)) + frame
-                    )
+                    self._writer.write(struct.pack(">BH", TYPE_AUDIO, len(frame)) + frame)
                 except Exception:
                     self._open = False
                     return
@@ -94,8 +92,15 @@ class AudioSocketTransport:
         self.events.append(event)
         kind = event.get("type")
         if kind in ("transcript", "transfer", "call_end", "barge_in"):
-            log.info("call event", extra={"event_type": kind, "payload": json.dumps(
-                {k: v for k, v in event.items() if k != "record"}, default=str)[:500]})
+            log.info(
+                "call event",
+                extra={
+                    "event_type": kind,
+                    "payload": json.dumps(
+                        {k: v for k, v in event.items() if k != "record"}, default=str
+                    )[:500],
+                },
+            )
 
     def drop_pending(self) -> None:
         """Barge-in: discard audio not yet handed to Asterisk."""
@@ -139,19 +144,22 @@ class AudioSocketServer:
         self._server: asyncio.AbstractServer | None = None
 
     async def start(self) -> None:
-        self._server = await asyncio.start_server(
-            self._handle, host=self._host, port=self._port
-        )
-        log.info("audiosocket listening", extra={"host": self._host, "port": self._port})
+        self._server = await asyncio.start_server(self._handle, host=self._host, port=self._port)
+        log.info("audiosocket listening", extra={"host": self._host, "port": self.port})
+
+    @property
+    def port(self) -> int:
+        """The bound port — differs from the requested one when that was 0."""
+        if self._server is not None and self._server.sockets:
+            return self._server.sockets[0].getsockname()[1]
+        return self._port
 
     async def stop(self) -> None:
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()
 
-    async def _handle(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-    ) -> None:
+    async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         peer = writer.get_extra_info("peername")
         transport = AudioSocketTransport(writer)
         call_uuid: str | None = None
@@ -189,9 +197,7 @@ class AudioSocketServer:
                 elif kind == TYPE_AUDIO:
                     if session is None or not payload:
                         continue
-                    await session.push_audio(
-                        resample_pcm16(payload, ASTERISK_RATE, SAMPLE_RATE)
-                    )
+                    await session.push_audio(resample_pcm16(payload, ASTERISK_RATE, SAMPLE_RATE))
 
                 elif kind == TYPE_HANGUP:
                     break
