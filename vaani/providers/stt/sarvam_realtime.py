@@ -111,9 +111,7 @@ class SarvamRealtimeSession:
             sample_rate=self._sample_rate,
             silence_duration_ms=self._silence_duration_ms,
         )
-        self._ws = await connect(
-            url, additional_headers={"API-SUBSCRIPTION-KEY": self._api_key}
-        )
+        self._ws = await connect(url, additional_headers={"API-SUBSCRIPTION-KEY": self._api_key})
         self._reader = asyncio.create_task(self._read(), name="saarika-reader")
         log.info("saarika realtime open", extra={"model": self._model})
 
@@ -124,9 +122,7 @@ class SarvamRealtimeSession:
             return
         try:
             await self._ws.send(
-                json.dumps(
-                    {"event": "audio_input", "audio": base64.b64encode(pcm).decode()}
-                )
+                json.dumps({"event": "audio_input", "audio": base64.b64encode(pcm).decode()})
             )
         except Exception:
             self.failed = True

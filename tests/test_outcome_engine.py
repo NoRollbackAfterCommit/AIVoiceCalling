@@ -232,9 +232,15 @@ async def test_a_profile_extension_is_accepted_by_the_tool():
 
 def _settings() -> Settings:
     return Settings(
-        stt_provider="mock", llm_provider="mock", tts_provider="mock",
-        vector_store="memory", embedding_provider="hash", record_calls=False,
-        end_of_turn_silence_ms=200, idle_prompt_after_s=120, idle_hangup_after_s=600,
+        stt_provider="mock",
+        llm_provider="mock",
+        tts_provider="mock",
+        vector_store="memory",
+        embedding_provider="hash",
+        record_calls=False,
+        end_of_turn_silence_ms=200,
+        idle_prompt_after_s=120,
+        idle_hangup_after_s=600,
     )
 
 
@@ -344,9 +350,7 @@ def test_the_nudge_is_one_shot():
     from vaani.agent.tools.builtin import registry as tool_registry
     from vaani.providers.llm.mock import MockLLM
 
-    agent = ConversationAgent(
-        DEFAULT_PROFILE, MockLLM(), tool_registry, ToolContext(call_id="t")
-    )
+    agent = ConversationAgent(DEFAULT_PROFILE, MockLLM(), tool_registry, ToolContext(call_id="t"))
     agent.nudge("STOP RETRYING")
     window = agent._window("STOP RETRYING")
     assert window[-1].content == "STOP RETRYING", "the steer must sit last"

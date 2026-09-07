@@ -16,9 +16,11 @@ from typing import Any
 
 call_id_var: ContextVar[str | None] = ContextVar("call_id", default=None)
 
-_RESERVED = set(
-    logging.LogRecord("", 0, "", 0, "", (), None).__dict__
-) | {"message", "asctime", "taskName"}
+_RESERVED = set(logging.LogRecord("", 0, "", 0, "", (), None).__dict__) | {
+    "message",
+    "asctime",
+    "taskName",
+}
 
 
 class _SafeAdapter(logging.LoggerAdapter):
@@ -35,9 +37,7 @@ class _SafeAdapter(logging.LoggerAdapter):
     def process(self, msg: str, kwargs: Any) -> tuple[str, Any]:
         extra = kwargs.get("extra")
         if extra:
-            kwargs["extra"] = {
-                (f"ctx_{k}" if k in _RESERVED else k): v for k, v in extra.items()
-            }
+            kwargs["extra"] = {(f"ctx_{k}" if k in _RESERVED else k): v for k, v in extra.items()}
         return msg, kwargs
 
 

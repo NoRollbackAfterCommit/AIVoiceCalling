@@ -114,14 +114,16 @@ async def test_awaiting_a_final_returns_the_transcript():
     await s.open()
     try:
         await s.feed(_pcm(200))
-        ws.push({
-            "event": "transcript.final",
-            "text": "मेरा बिजली का बिल",
-            "language": "hi-IN",
-            "language_confidence": "0.91",
-            "start_s": 0.2,
-            "end_s": 1.7,
-        })
+        ws.push(
+            {
+                "event": "transcript.final",
+                "text": "मेरा बिजली का बिल",
+                "language": "hi-IN",
+                "language_confidence": "0.91",
+                "start_s": 0.2,
+                "end_s": 1.7,
+            }
+        )
         result = await s.await_final(timeout=2.0)
         assert result is not None
         assert result.text == "मेरा बिजली का बिल"
@@ -167,7 +169,7 @@ async def test_a_dead_socket_degrades_instead_of_raising():
     s = _session(ws)
     await s.open()
     try:
-        await s.feed(_pcm(20))          # must not raise
+        await s.feed(_pcm(20))  # must not raise
         assert s.failed is True
         assert await s.await_final(timeout=0.2) is None
     finally:

@@ -28,16 +28,12 @@ CORE_DISPOSITIONS: tuple[str, ...] = (
 )
 
 # Only the platform can know these: the caller is already gone.
-PLATFORM_SET: frozenset[str] = frozenset(
-    {"caller_abandoned", "idle_timeout", "capacity_rejected"}
-)
+PLATFORM_SET: frozenset[str] = frozenset({"caller_abandoned", "idle_timeout", "capacity_rejected"})
 AGENT_SET: frozenset[str] = frozenset(CORE_DISPOSITIONS) - PLATFORM_SET
 
 # Outcomes that must carry a reference the caller can quote back. A complaint
 # with no number is not a complaint the caller can chase.
-REQUIRES_REFERENCE: frozenset[str] = frozenset(
-    {"complaint_registered", "callback_scheduled"}
-)
+REQUIRES_REFERENCE: frozenset[str] = frozenset({"complaint_registered", "callback_scheduled"})
 
 # What the platform records when the caller is gone, keyed by transport outcome.
 PLATFORM_FOR_OUTCOME: dict[str, str] = {

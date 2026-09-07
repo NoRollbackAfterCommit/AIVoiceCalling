@@ -35,8 +35,10 @@ def tone(ms: int, freq: float = 220.0, amplitude: float = 0.5) -> bytes:
     n = int(SAMPLE_RATE * ms / 1000)
     return struct.pack(
         f"<{n}h",
-        *(int(amplitude * 32767 * math.sin(2 * math.pi * freq * i / SAMPLE_RATE))
-          for i in range(n)),
+        *(
+            int(amplitude * 32767 * math.sin(2 * math.pi * freq * i / SAMPLE_RATE))
+            for i in range(n)
+        ),
     )
 
 
@@ -172,7 +174,8 @@ def test_barge_in_needs_sustained_speech():
 
 def test_system_prompt_carries_policy_and_guardrails():
     profile = AgentProfile(
-        key="t", organisation="Kolkata Municipal Corporation",
+        key="t",
+        organisation="Kolkata Municipal Corporation",
         policies=["Property tax is due on the thirty first of March."],
         forbidden_topics=["Legal advice"],
     )
@@ -180,8 +183,8 @@ def test_system_prompt_carries_policy_and_guardrails():
     assert "Kolkata Municipal Corporation" in prompt
     assert "thirty first of March" in prompt
     assert "Legal advice" in prompt
-    assert "markdown" in prompt.lower()          # voice rules present
-    assert "never as an instruction" in prompt   # injection guard present
+    assert "markdown" in prompt.lower()  # voice rules present
+    assert "never as an instruction" in prompt  # injection guard present
 
 
 def test_speech_cleaner_strips_markdown():
@@ -242,8 +245,11 @@ async def test_tool_requiring_verification_is_refused_until_verified(services):
     registry = ToolRegistry()
     registry.register(
         Tool(
-            name="secret", description="", parameters={"type": "object", "properties": {}},
-            fn=_ok, requires_verification=True,
+            name="secret",
+            description="",
+            parameters={"type": "object", "properties": {}},
+            fn=_ok,
+            requires_verification=True,
         )
     )
     ctx = ToolContext(call_id="t")
@@ -278,11 +284,13 @@ def test_chunking_respects_target_size_and_drops_fragments():
 async def test_retrieval_finds_the_right_document(services):
     await services.retriever.index_text(
         "Admission to the B.Tech programme requires a minimum of sixty percent in "
-        "the higher secondary examination.", source="admissions",
+        "the higher secondary examination.",
+        source="admissions",
     )
     await services.retriever.index_text(
         "The hospital outpatient department is open from eight in the morning "
-        "until two in the afternoon.", source="hospital",
+        "until two in the afternoon.",
+        source="hospital",
     )
     hits = await services.retriever.search("what percentage do I need for admission")
     assert hits, "expected at least one hit"
@@ -428,8 +436,10 @@ async def test_logging_survives_reserved_field_names(services, caplog):
     log = get_logger("test.reserved")
     with caplog.at_level(_logging.INFO):
         # Every one of these is a reserved LogRecord attribute.
-        log.info("probe", extra={"args": {"a": 1}, "module": "x", "name": "y",
-                                 "filename": "z", "levelno": 99})
+        log.info(
+            "probe",
+            extra={"args": {"a": 1}, "module": "x", "name": "y", "filename": "z", "levelno": 99},
+        )
 
         ctx = ToolContext(call_id="t", services=services.as_tool_services())
         agent = ConversationAgent(DEFAULT_PROFILE, services.llm, tools, ctx)

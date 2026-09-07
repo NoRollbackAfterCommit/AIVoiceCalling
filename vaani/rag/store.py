@@ -34,10 +34,12 @@ class SearchHit:
 
 class VectorStore(Protocol):
     async def ensure(self, dim: int) -> None: ...
-    async def upsert(self, chunks: list[Chunk], vectors: list[list[float]],
-                     namespace: str) -> int: ...
-    async def search(self, vector: list[float], namespace: str, top_k: int,
-                     min_score: float) -> list[SearchHit]: ...
+    async def upsert(
+        self, chunks: list[Chunk], vectors: list[list[float]], namespace: str
+    ) -> int: ...
+    async def search(
+        self, vector: list[float], namespace: str, top_k: int, min_score: float
+    ) -> list[SearchHit]: ...
     async def delete_source(self, source: str, namespace: str) -> int: ...
     async def count(self, namespace: str | None = None) -> int: ...
     async def sources(self, namespace: str) -> list[tuple[str, int]]: ...
@@ -56,9 +58,7 @@ class MemoryVectorStore:
     async def ensure(self, dim: int) -> None:
         return None
 
-    async def upsert(
-        self, chunks: list[Chunk], vectors: list[list[float]], namespace: str
-    ) -> int:
+    async def upsert(self, chunks: list[Chunk], vectors: list[list[float]], namespace: str) -> int:
         bucket = self._data.setdefault(namespace, [])
         bucket.extend(zip(vectors, chunks, strict=True))
         return len(chunks)
@@ -67,10 +67,7 @@ class MemoryVectorStore:
         self, vector: list[float], namespace: str, top_k: int, min_score: float
     ) -> list[SearchHit]:
         bucket = self._data.get(namespace, [])
-        scored = [
-            (_cosine(vector, vec), chunk)
-            for vec, chunk in bucket
-        ]
+        scored = [(_cosine(vector, vec), chunk) for vec, chunk in bucket]
         scored.sort(key=lambda pair: pair[0], reverse=True)
         return [
             SearchHit(text=c.text, source=c.source, score=round(s, 4), metadata=c.metadata)
@@ -115,8 +112,10 @@ class QdrantVectorStore:
     name = "qdrant"
 
     def __init__(
-        self, url: str = "http://localhost:6333", api_key: str | None = None,
-        collection: str = "vaani_knowledge"
+        self,
+        url: str = "http://localhost:6333",
+        api_key: str | None = None,
+        collection: str = "vaani_knowledge",
     ) -> None:
         self._url = url
         self._api_key = api_key
@@ -152,9 +151,7 @@ class QdrantVectorStore:
         )
         log.info("created qdrant collection", extra={"collection": self._collection, "dim": dim})
 
-    async def upsert(
-        self, chunks: list[Chunk], vectors: list[list[float]], namespace: str
-    ) -> int:
+    async def upsert(self, chunks: list[Chunk], vectors: list[list[float]], namespace: str) -> int:
         from qdrant_client.models import PointStruct
 
         points = [
@@ -202,8 +199,9 @@ class QdrantVectorStore:
                 text=r.payload.get("text", ""),
                 source=r.payload.get("source", "unknown"),
                 score=round(r.score, 4),
-                metadata={k: v for k, v in r.payload.items()
-                          if k not in ("text", "source", "namespace")},
+                metadata={
+                    k: v for k, v in r.payload.items() if k not in ("text", "source", "namespace")
+                },
             )
             for r in results
         ]
@@ -229,9 +227,7 @@ class QdrantVectorStore:
 
         flt = None
         if namespace:
-            flt = Filter(
-                must=[FieldCondition(key="namespace", match=MatchValue(value=namespace))]
-            )
+            flt = Filter(must=[FieldCondition(key="namespace", match=MatchValue(value=namespace))])
         result = await self._client.count(collection_name=self._collection, count_filter=flt)
         return result.count
 

@@ -35,9 +35,7 @@ async def test_satisfies_the_protocol():
 async def test_transcribes_and_reports_language():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["api-subscription-key"] == "k"
-        return httpx.Response(
-            200, json={"transcript": "बिजली का बिल", "language_code": "hi-IN"}
-        )
+        return httpx.Response(200, json={"transcript": "बिजली का बिल", "language_code": "hi-IN"})
 
     stt = SarvamSTT(api_key="k")
     stt._http = _stub(handler)
@@ -129,8 +127,6 @@ async def test_language_probability_becomes_confidence():
 async def test_an_unparseable_probability_is_not_fatal():
     stt = SarvamSTT(api_key="k")
     stt._http = _stub(
-        lambda r: httpx.Response(
-            200, json={"transcript": "x", "language_probability": "n/a"}
-        )
+        lambda r: httpx.Response(200, json={"transcript": "x", "language_probability": "n/a"})
     )
     assert (await stt.transcribe(_pcm(500))).confidence is None

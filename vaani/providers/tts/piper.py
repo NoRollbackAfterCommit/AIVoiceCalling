@@ -57,9 +57,7 @@ class PiperTTS:
 
     async def start(self) -> None:
         # Preload the default so the first caller does not pay the load cost.
-        self._voices[self._default_voice] = await asyncio.to_thread(
-            self._load, self._default_voice
-        )
+        self._voices[self._default_voice] = await asyncio.to_thread(self._load, self._default_voice)
 
     async def _voice_for(self, voice: str | None) -> Any:
         key = voice or self._default_voice
@@ -73,9 +71,7 @@ class PiperTTS:
         native_rate = engine.config.sample_rate
         chunks: list[np.ndarray] = []
         # length_scale > 1 slows speech down; invert so `speed` reads naturally.
-        for audio in engine.synthesize_stream_raw(
-            text, length_scale=1.0 / max(self._speed, 0.1)
-        ):
+        for audio in engine.synthesize_stream_raw(text, length_scale=1.0 / max(self._speed, 0.1)):
             chunks.append(np.frombuffer(audio, dtype=np.int16))
         if not chunks:
             return b""

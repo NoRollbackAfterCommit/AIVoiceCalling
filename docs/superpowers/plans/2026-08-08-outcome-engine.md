@@ -49,8 +49,14 @@ from vaani.agent.prompt import AgentProfile, render_system_prompt
 
 def test_core_vocabulary_is_complete():
     assert set(CORE_DISPOSITIONS) == {
-        "resolved", "complaint_registered", "callback_scheduled", "transferred",
-        "out_of_scope", "unresolved", "caller_abandoned", "idle_timeout",
+        "resolved",
+        "complaint_registered",
+        "callback_scheduled",
+        "transferred",
+        "out_of_scope",
+        "unresolved",
+        "caller_abandoned",
+        "idle_timeout",
         "capacity_rejected",
     }
 
@@ -133,15 +139,11 @@ CORE_DISPOSITIONS: tuple[str, ...] = (
 )
 
 # Only the platform can know these: the caller is already gone.
-PLATFORM_SET: frozenset[str] = frozenset(
-    {"caller_abandoned", "idle_timeout", "capacity_rejected"}
-)
+PLATFORM_SET: frozenset[str] = frozenset({"caller_abandoned", "idle_timeout", "capacity_rejected"})
 AGENT_SET: frozenset[str] = frozenset(CORE_DISPOSITIONS) - PLATFORM_SET
 
 # Dispositions that must carry a reference the caller can quote back.
-REQUIRES_REFERENCE: frozenset[str] = frozenset(
-    {"complaint_registered", "callback_scheduled"}
-)
+REQUIRES_REFERENCE: frozenset[str] = frozenset({"complaint_registered", "callback_scheduled"})
 
 
 def allowed_for(profile: Any) -> tuple[str, ...]:
@@ -364,8 +366,10 @@ class ProgressTracker:
         every subsequent turn is its own kind of loop."""
         if self.stalled and not self._fallback_offered:
             self._fallback_offered = True
-            log.info("call stalled, offering fallback",
-                     extra={"unproductive_turns": self.unproductive_turns})
+            log.info(
+                "call stalled, offering fallback",
+                extra={"unproductive_turns": self.unproductive_turns},
+            )
             return True
         return False
 
@@ -559,9 +563,7 @@ async def end_call(summary: str, ctx: ToolContext) -> ToolResult:
     if not disposition:
         # Refusing here is what makes the audit trail complete by construction.
         return ToolResult(
-            content=(
-                "Record the outcome first with set_disposition, then end the call."
-            ),
+            content=("Record the outcome first with set_disposition, then end the call."),
             ok=False,
         )
     return ToolResult(
@@ -622,9 +624,15 @@ from .test_pipeline import FakeTransport, silence, tone
 
 def _settings(**over) -> Settings:
     base = dict(
-        stt_provider="mock", llm_provider="mock", tts_provider="mock",
-        vector_store="memory", embedding_provider="hash", record_calls=False,
-        end_of_turn_silence_ms=200, idle_prompt_after_s=120, idle_hangup_after_s=600,
+        stt_provider="mock",
+        llm_provider="mock",
+        tts_provider="mock",
+        vector_store="memory",
+        embedding_provider="hash",
+        record_calls=False,
+        end_of_turn_silence_ms=200,
+        idle_prompt_after_s=120,
+        idle_hangup_after_s=600,
     )
     base.update(over)
     return Settings(**base)
@@ -651,7 +659,8 @@ async def test_an_abandoned_call_gets_a_platform_disposition(services):
 
 async def test_an_idle_timeout_gets_its_own_disposition(services):
     session = CallSession(
-        transport=FakeTransport(), services=services,
+        transport=FakeTransport(),
+        services=services,
         settings=_settings(idle_prompt_after_s=2.0, idle_hangup_after_s=5.0),
     )
     task = asyncio.create_task(session.run())
@@ -967,9 +976,15 @@ from .test_pipeline import FakeTransport, silence, tone
 
 def _settings() -> Settings:
     return Settings(
-        stt_provider="mock", llm_provider="mock", tts_provider="mock",
-        vector_store="memory", embedding_provider="hash", record_calls=False,
-        end_of_turn_silence_ms=200, idle_prompt_after_s=120, idle_hangup_after_s=600,
+        stt_provider="mock",
+        llm_provider="mock",
+        tts_provider="mock",
+        vector_store="memory",
+        embedding_provider="hash",
+        record_calls=False,
+        end_of_turn_silence_ms=200,
+        idle_prompt_after_s=120,
+        idle_hangup_after_s=600,
     )
 
 

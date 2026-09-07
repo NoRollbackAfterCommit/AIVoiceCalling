@@ -104,9 +104,7 @@ async def test_satisfies_the_protocol():
 async def test_transcribes_and_reports_language():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["api-subscription-key"] == "k"
-        return httpx.Response(
-            200, json={"transcript": "बिजली का बिल", "language_code": "hi-IN"}
-        )
+        return httpx.Response(200, json={"transcript": "बिजली का बिल", "language_code": "hi-IN"})
 
     stt = SarvamSTT(api_key="k")
     stt._http = _stub(handler)
@@ -374,9 +372,7 @@ async def test_satisfies_the_protocol():
 
 async def test_synthesize_returns_pcm_at_the_pipeline_rate():
     tts = SarvamTTS(api_key="k")
-    tts._http = _stub(
-        lambda r: httpx.Response(200, json={"audios": [_wav_b64(0.5, 22050)]})
-    )
+    tts._http = _stub(lambda r: httpx.Response(200, json={"audios": [_wav_b64(0.5, 22050)]}))
     pcm = await tts.synthesize("नमस्ते")
 
     # 0.5 s at SAMPLE_RATE, 2 bytes per sample, within resampler rounding.
@@ -403,9 +399,7 @@ async def test_voice_and_language_reach_the_request():
 
 async def test_stream_yields_frame_aligned_chunks():
     tts = SarvamTTS(api_key="k")
-    tts._http = _stub(
-        lambda r: httpx.Response(200, json={"audios": [_wav_b64(1.0, 22050)]})
-    )
+    tts._http = _stub(lambda r: httpx.Response(200, json={"audios": [_wav_b64(1.0, 22050)]}))
     chunks = [c async for c in tts.stream("एक दो तीन")]
 
     assert chunks, "expected at least one chunk"
@@ -653,55 +647,68 @@ Expected: FAIL — `ValidationError: Input should be 'mock', 'faster_whisper' or
 In `vaani/config.py`, extend the STT provider literal and options:
 
 ```python
-    stt_provider: Literal["mock", "faster_whisper", "openai", "sarvam"] = cfg(
-        "mock", group="Speech to text", label="Provider",
-        options=_opts(
-            ("mock", "Mock — no model, for development"),
-            ("faster_whisper", "Faster-Whisper — self-hosted, offline"),
-            ("openai", "OpenAI Whisper API — hosted"),
-            ("sarvam", "Sarvam Saarika — Indian languages, hosted in India"),
-        ),
-    )
+stt_provider: Literal["mock", "faster_whisper", "openai", "sarvam"] = cfg(
+    "mock",
+    group="Speech to text",
+    label="Provider",
+    options=_opts(
+        ("mock", "Mock — no model, for development"),
+        ("faster_whisper", "Faster-Whisper — self-hosted, offline"),
+        ("openai", "OpenAI Whisper API — hosted"),
+        ("sarvam", "Sarvam Saarika — Indian languages, hosted in India"),
+    ),
+)
 ```
 
 Extend the TTS provider literal and options:
 
 ```python
-    tts_provider: Literal["mock", "piper", "openai", "sarvam"] = cfg(
-        "mock", group="Text to speech", label="Provider",
-        options=_opts(
-            ("mock", "Mock — tone generator, for development"),
-            ("piper", "Piper — self-hosted, offline"),
-            ("openai", "OpenAI speech — hosted"),
-            ("sarvam", "Sarvam Bulbul — Indian languages, hosted in India"),
-        ),
-    )
+tts_provider: Literal["mock", "piper", "openai", "sarvam"] = cfg(
+    "mock",
+    group="Text to speech",
+    label="Provider",
+    options=_opts(
+        ("mock", "Mock — tone generator, for development"),
+        ("piper", "Piper — self-hosted, offline"),
+        ("openai", "OpenAI speech — hosted"),
+        ("sarvam", "Sarvam Bulbul — Indian languages, hosted in India"),
+    ),
+)
 ```
 
 Add these fields immediately after the OpenAI block in the "Language model" group's neighbouring sections — `sarvam_api_key` in "Speech to text" since it is shared by both speech providers:
 
 ```python
-    sarvam_api_key: str | None = cfg(
-        None, group="Speech to text", label="Sarvam API key", secret=True,
-        help="One key covers both Saarika speech recognition and Bulbul speech "
-             "synthesis. Sarvam hosts in India, which is what makes it usable "
-             "for a deployment with data residency obligations.",
-        depends_on={"stt_provider": ["sarvam"], "tts_provider": ["sarvam"]},
-    )
-    sarvam_stt_model: str = cfg(
-        "saaras:v3", group="Speech to text", label="Saarika model",
-        depends_on={"stt_provider": ["sarvam"]},
-    )
-    sarvam_tts_model: str = cfg(
-        "bulbul:v3", group="Text to speech", label="Bulbul model",
-        depends_on={"tts_provider": ["sarvam"]},
-    )
-    sarvam_voice: str = cfg(
-        "hi-IN:anushka", group="Text to speech", label="Sarvam voice",
-        help="Written as language:speaker, for example hi-IN:meera or "
-             "bn-IN:anushka. The language half selects pronunciation.",
-        depends_on={"tts_provider": ["sarvam"]},
-    )
+sarvam_api_key: str | None = cfg(
+    None,
+    group="Speech to text",
+    label="Sarvam API key",
+    secret=True,
+    help="One key covers both Saarika speech recognition and Bulbul speech "
+    "synthesis. Sarvam hosts in India, which is what makes it usable "
+    "for a deployment with data residency obligations.",
+    depends_on={"stt_provider": ["sarvam"], "tts_provider": ["sarvam"]},
+)
+sarvam_stt_model: str = cfg(
+    "saaras:v3",
+    group="Speech to text",
+    label="Saarika model",
+    depends_on={"stt_provider": ["sarvam"]},
+)
+sarvam_tts_model: str = cfg(
+    "bulbul:v3",
+    group="Text to speech",
+    label="Bulbul model",
+    depends_on={"tts_provider": ["sarvam"]},
+)
+sarvam_voice: str = cfg(
+    "hi-IN:anushka",
+    group="Text to speech",
+    label="Sarvam voice",
+    help="Written as language:speaker, for example hi-IN:meera or "
+    "bn-IN:anushka. The language half selects pronunciation.",
+    depends_on={"tts_provider": ["sarvam"]},
+)
 ```
 
 - [ ] **Step 4: Add the registry branches**
@@ -887,9 +894,7 @@ log = get_logger(__name__)
 
 
 class LanguageTracker:
-    def __init__(
-        self, default: str, voices: dict[str, str], switch_after: int = 2
-    ) -> None:
+    def __init__(self, default: str, voices: dict[str, str], switch_after: int = 2) -> None:
         self._voices = dict(voices)
         self._switch_after = max(1, switch_after)
         self.current = default
@@ -1052,7 +1057,11 @@ async def test_append_turn_does_not_block(repo):
     immediately — the write happens on a background task."""
     await repo.create_call(FakeRecord())
     result = repo.append_turn(
-        "c1", 0, "caller", "बिजली का बिल", "hi-IN",
+        "c1",
+        0,
+        "caller",
+        "बिजली का बिल",
+        "hi-IN",
         {"stt_ms": 300, "agent_ms": 400, "tts_first_chunk_ms": 200, "total_ms": 900},
     )
     assert result is None
@@ -1156,9 +1165,7 @@ class TurnRow(Base):
     __tablename__ = "turns"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    call_id: Mapped[str] = mapped_column(
-        String(32), ForeignKey("calls.call_id"), index=True
-    )
+    call_id: Mapped[str] = mapped_column(String(32), ForeignKey("calls.call_id"), index=True)
     seq: Mapped[int] = mapped_column(Integer)
     role: Mapped[str] = mapped_column(String(16))
     text: Mapped[str] = mapped_column(Text, default="")
@@ -1336,13 +1343,17 @@ is declared now even though enforcement lands in phase 3. Add to `vaani/config.p
 in the "Storage" group, next to `record_calls`:
 
 ```python
-    retention_days: int = cfg(
-        365, group="Storage", label="Retain records for (days)", ge=1, le=3650,
-        restart=False,
-        help="How long call records, transcripts and recordings are kept. "
-             "Declared now for the audit conversation; automatic deletion "
-             "arrives with the Postgres migration.",
-    )
+retention_days: int = cfg(
+    365,
+    group="Storage",
+    label="Retain records for (days)",
+    ge=1,
+    le=3650,
+    restart=False,
+    help="How long call records, transcripts and recordings are kept. "
+    "Declared now for the audit conversation; automatic deletion "
+    "arrives with the Postgres migration.",
+)
 ```
 
 No `changed(...)` entry is needed: `restart=False` and nothing reads it yet.
@@ -1392,9 +1403,15 @@ from .test_pipeline import FakeTransport, silence, tone
 @pytest.fixture
 async def services_with_db(tmp_path):
     s = Settings(
-        stt_provider="mock", llm_provider="mock", tts_provider="mock",
-        vector_store="memory", embedding_provider="hash", record_calls=False,
-        end_of_turn_silence_ms=200, idle_prompt_after_s=120, idle_hangup_after_s=600,
+        stt_provider="mock",
+        llm_provider="mock",
+        tts_provider="mock",
+        vector_store="memory",
+        embedding_provider="hash",
+        record_calls=False,
+        end_of_turn_silence_ms=200,
+        idle_prompt_after_s=120,
+        idle_hangup_after_s=600,
     )
     svc = build_services(s)
     svc.calls = CallRepository(f"sqlite+aiosqlite:///{tmp_path / 'calls.db'}")
@@ -1409,7 +1426,9 @@ async def test_a_call_is_persisted_with_its_turns(services_with_db):
     svc = services_with_db
     transport = FakeTransport()
     session = CallSession(
-        transport=transport, services=svc, agent_key="default",
+        transport=transport,
+        services=svc,
+        agent_key="default",
         caller_number="+919876543210",
     )
     import asyncio
@@ -1436,9 +1455,13 @@ async def test_a_call_is_persisted_with_its_turns(services_with_db):
 async def test_sessions_run_fine_without_a_repository(tmp_path):
     """Persistence is optional: a bare install must still place calls."""
     s = Settings(
-        stt_provider="mock", llm_provider="mock", tts_provider="mock",
-        record_calls=False, end_of_turn_silence_ms=200,
-        idle_prompt_after_s=120, idle_hangup_after_s=600,
+        stt_provider="mock",
+        llm_provider="mock",
+        tts_provider="mock",
+        record_calls=False,
+        end_of_turn_silence_ms=200,
+        idle_prompt_after_s=120,
+        idle_hangup_after_s=600,
     )
     svc = build_services(s)
     await svc.start()
@@ -1500,16 +1523,24 @@ At the start of `run()`, after the call id context is set:
 In `_process_turn`, after the turn is appended to `self.record.turns`, persist both sides:
 
 ```python
-        if self._services.calls is not None:
-            seq = len(self.record.turns) - 1
-            self._services.calls.append_turn(
-                self.call_id, seq * 2, "caller", transcript.text,
-                self._language.current, asdict(metrics),
-            )
-            self._services.calls.append_turn(
-                self.call_id, seq * 2 + 1, "agent", turn.text,
-                self._language.current, asdict(metrics),
-            )
+if self._services.calls is not None:
+    seq = len(self.record.turns) - 1
+    self._services.calls.append_turn(
+        self.call_id,
+        seq * 2,
+        "caller",
+        transcript.text,
+        self._language.current,
+        asdict(metrics),
+    )
+    self._services.calls.append_turn(
+        self.call_id,
+        seq * 2 + 1,
+        "agent",
+        turn.text,
+        self._language.current,
+        asdict(metrics),
+    )
 ```
 
 In `_finish`, after `self.record.outcome` is settled and the summary is generated:
@@ -1599,11 +1630,13 @@ def _pcm(ms: int) -> bytes:
 
 
 def test_parses_the_start_event_and_its_identifiers():
-    raw = json.dumps({
-        "event": "start",
-        "stream_sid": "s-1",
-        "start": {"call_sid": "c-1", "from": "+919876543210", "to": "+911800123456"},
-    })
+    raw = json.dumps(
+        {
+            "event": "start",
+            "stream_sid": "s-1",
+            "start": {"call_sid": "c-1", "from": "+919876543210", "to": "+911800123456"},
+        }
+    )
     event = parse_frame(raw)
     assert event.kind == "start"
     assert event.stream_sid == "s-1"
@@ -1613,8 +1646,7 @@ def test_parses_the_start_event_and_its_identifiers():
 
 def test_parses_media_into_pipeline_pcm():
     payload = base64.b64encode(_pcm(100)).decode()
-    raw = json.dumps({"event": "media", "stream_sid": "s-1",
-                      "media": {"payload": payload}})
+    raw = json.dumps({"event": "media", "stream_sid": "s-1", "media": {"payload": payload}})
     event = parse_frame(raw)
     assert event.kind == "media"
     assert event.pcm == _pcm(100)
@@ -1725,11 +1757,13 @@ def parse_frame(raw: str | bytes) -> ExotelEvent:
 
 
 def media_frame(stream_sid: str, pcm: bytes) -> str:
-    return json.dumps({
-        "event": "media",
-        "stream_sid": stream_sid,
-        "media": {"payload": base64.b64encode(pcm).decode()},
-    })
+    return json.dumps(
+        {
+            "event": "media",
+            "stream_sid": stream_sid,
+            "media": {"payload": base64.b64encode(pcm).decode()},
+        }
+    )
 
 
 def clear_frame(stream_sid: str) -> str:
@@ -1959,9 +1993,7 @@ async def exotel_stream(ws: WebSocket, agent: str = Query("default")) -> None:
                     log.warning("rejected exotel call at capacity")
                     await transport.close()
                     return
-                session_task = asyncio.create_task(
-                    session.run(), name=f"exotel:{session.call_id}"
-                )
+                session_task = asyncio.create_task(session.run(), name=f"exotel:{session.call_id}")
                 log.info(
                     "exotel call started",
                     extra={"call_id": session.call_id, "call_sid": event.call_sid},
@@ -2005,19 +2037,26 @@ and extend the import: `from vaani.api import exotel_ws, routes, settings as set
 Add to `vaani/config.py` in the "Service" group:
 
 ```python
-    exotel_enabled: bool = cfg(
-        False, group="Service", label="Accept Exotel calls",
-        help="Exposes the streaming endpoint at /ws/exotel. Leave off until the "
-             "Voicebot applet is provisioned on your account.",
-    )
-    exotel_account_sid: str | None = cfg(
-        None, group="Service", label="Exotel account SID",
-        depends_on={"exotel_enabled": ["true"]},
-    )
-    exotel_api_key: str | None = cfg(
-        None, group="Service", label="Exotel API key", secret=True,
-        depends_on={"exotel_enabled": ["true"]},
-    )
+exotel_enabled: bool = cfg(
+    False,
+    group="Service",
+    label="Accept Exotel calls",
+    help="Exposes the streaming endpoint at /ws/exotel. Leave off until the "
+    "Voicebot applet is provisioned on your account.",
+)
+exotel_account_sid: str | None = cfg(
+    None,
+    group="Service",
+    label="Exotel account SID",
+    depends_on={"exotel_enabled": ["true"]},
+)
+exotel_api_key: str | None = cfg(
+    None,
+    group="Service",
+    label="Exotel API key",
+    secret=True,
+    depends_on={"exotel_enabled": ["true"]},
+)
 ```
 
 These configure the carrier side and are read at request time, so no

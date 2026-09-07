@@ -93,9 +93,9 @@ def build_vad(aggressiveness: int = 2) -> VAD:
 
 
 class TurnState:
-    IDLE = "idle"        # nothing heard yet
+    IDLE = "idle"  # nothing heard yet
     SPEAKING = "speaking"  # caller is mid-utterance
-    ENDED = "ended"      # utterance complete, ready to transcribe
+    ENDED = "ended"  # utterance complete, ready to transcribe
 
 
 @dataclass(slots=True)

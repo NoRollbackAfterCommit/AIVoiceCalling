@@ -166,6 +166,7 @@ Built in: `search_knowledge`, `transfer_to_human`, `end_call`,
 from vaani.agent.tools.builtin import registry
 from vaani.agent.tools.base import ToolContext, ToolResult
 
+
 @registry.tool(
     name="book_appointment",
     description="Book an OPD slot. Confirm the department and date with the caller first.",
@@ -177,7 +178,7 @@ from vaani.agent.tools.base import ToolContext, ToolResult
         },
         "required": ["department", "date"],
     },
-    requires_verification=True,   # caller identity must be confirmed first
+    requires_verification=True,  # caller identity must be confirmed first
 )
 async def book_appointment(department: str, date: str, ctx: ToolContext) -> ToolResult:
     token = await hospital_api.book(ctx.state["mobile_number"], department, date)

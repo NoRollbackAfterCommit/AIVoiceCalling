@@ -37,8 +37,10 @@ class MockTTS:
         for n in range(total):
             t = n / SAMPLE_RATE
             envelope = 0.5 + 0.5 * math.sin(2 * math.pi * 3.1 * t)
-            value = 0.18 * envelope * (
-                math.sin(2 * math.pi * 165 * t) + 0.4 * math.sin(2 * math.pi * 330 * t)
+            value = (
+                0.18
+                * envelope
+                * (math.sin(2 * math.pi * 165 * t) + 0.4 * math.sin(2 * math.pi * 330 * t))
             )
             # Fade the edges so chunk boundaries do not click.
             if n < 240:

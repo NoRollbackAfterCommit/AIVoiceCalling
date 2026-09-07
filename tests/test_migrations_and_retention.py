@@ -49,9 +49,7 @@ def _columns(path) -> set[str]:
 def test_async_urls_become_sync_ones_for_alembic():
     """Alembic runs on a sync driver while the app runs on an async one."""
     assert to_sync_url("sqlite+aiosqlite:///./x.db") == "sqlite:///./x.db"
-    assert (
-        to_sync_url("postgresql+asyncpg://u:p@h/db") == "postgresql+psycopg2://u:p@h/db"
-    )
+    assert to_sync_url("postgresql+asyncpg://u:p@h/db") == "postgresql+psycopg2://u:p@h/db"
 
 
 def test_a_plain_url_is_left_alone():
@@ -68,7 +66,8 @@ async def test_a_fresh_database_gets_the_whole_schema(tmp_path):
     try:
         assert NEW_COLUMNS[0] in _columns(db)
         assert "turns" in {
-            r[0] for r in sqlite3.connect(str(db)).execute(
+            r[0]
+            for r in sqlite3.connect(str(db)).execute(
                 "select name from sqlite_master where type='table'"
             )
         }
@@ -175,9 +174,7 @@ async def test_recordings_are_deleted_with_their_records(repo, tmp_path):
     while its recording stays on disk has not been deleted in any real sense."""
     audio = tmp_path / "old-call.wav"
     audio.write_bytes(b"RIFF")
-    rec = Rec(
-        call_id="old", started_at=time.time() - 400 * 86400, recording_path=str(audio)
-    )
+    rec = Rec(call_id="old", started_at=time.time() - 400 * 86400, recording_path=str(audio))
     await repo.create_call(rec)
     await repo.finish_call(rec)
 

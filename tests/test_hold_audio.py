@@ -30,7 +30,7 @@ def test_chunks_are_sample_aligned_and_a_sensible_size():
     loop = hold_loop()
     chunk = next(loop)
     assert len(chunk) % 2 == 0
-    assert len(chunk) == FRAME_BYTES * 10          # 200 ms
+    assert len(chunk) == FRAME_BYTES * 10  # 200 ms
     assert len(chunk) / 2 / SAMPLE_RATE == pytest.approx(0.2)
 
 
@@ -48,16 +48,22 @@ def test_it_actually_produces_sound():
 
 def test_it_loops_without_running_out():
     loop = hold_loop()
-    total = sum(len(next(loop)) for _ in range(200))   # 40 s
+    total = sum(len(next(loop)) for _ in range(200))  # 40 s
     assert total == FRAME_BYTES * 10 * 200
 
 
 @pytest.fixture
 def settings() -> Settings:
     return Settings(
-        stt_provider="mock", llm_provider="mock", tts_provider="mock",
-        vector_store="memory", embedding_provider="hash", record_calls=False,
-        end_of_turn_silence_ms=200, idle_prompt_after_s=120, idle_hangup_after_s=600,
+        stt_provider="mock",
+        llm_provider="mock",
+        tts_provider="mock",
+        vector_store="memory",
+        embedding_provider="hash",
+        record_calls=False,
+        end_of_turn_silence_ms=200,
+        idle_prompt_after_s=120,
+        idle_hangup_after_s=600,
     )
 
 

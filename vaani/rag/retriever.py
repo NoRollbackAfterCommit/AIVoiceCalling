@@ -23,9 +23,34 @@ log = get_logger(__name__)
 
 _TOKEN = re.compile(r"\w+", re.UNICODE)
 _STOP = {
-    "the", "a", "an", "is", "are", "was", "of", "to", "for", "in", "on", "and",
-    "or", "my", "i", "you", "it", "what", "how", "when", "where", "can", "do",
-    "does", "please", "tell", "me", "about",
+    "the",
+    "a",
+    "an",
+    "is",
+    "are",
+    "was",
+    "of",
+    "to",
+    "for",
+    "in",
+    "on",
+    "and",
+    "or",
+    "my",
+    "i",
+    "you",
+    "it",
+    "what",
+    "how",
+    "when",
+    "where",
+    "can",
+    "do",
+    "does",
+    "please",
+    "tell",
+    "me",
+    "about",
 }
 
 
@@ -81,8 +106,12 @@ class Retriever:
         return total
 
     async def index_text(
-        self, text: str, source: str, *, agent_key: str = "default",
-        metadata: dict[str, Any] | None = None
+        self,
+        text: str,
+        source: str,
+        *,
+        agent_key: str = "default",
+        metadata: dict[str, Any] | None = None,
     ) -> int:
         return await self.index_chunks(
             chunk_text(text, source=source, metadata=metadata), agent_key=agent_key

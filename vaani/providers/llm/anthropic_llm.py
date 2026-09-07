@@ -32,8 +32,14 @@ log = get_logger(__name__)
 # Models taking `thinking: {"type": "adaptive"}` and `output_config.effort`.
 # Older models use a fixed thinking budget instead and reject both.
 _ADAPTIVE_THINKING = {
-    "claude-opus-5", "claude-sonnet-5", "claude-fable-5", "claude-mythos-5",
-    "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6",
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "claude-fable-5",
+    "claude-mythos-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
 }
 
 # Everything else returns 400 if `temperature` is present at all.
@@ -149,8 +155,7 @@ class AnthropicLLM:
                 {
                     "name": fn.get("name", ""),
                     "description": fn.get("description", ""),
-                    "input_schema": fn.get("parameters")
-                    or {"type": "object", "properties": {}},
+                    "input_schema": fn.get("parameters") or {"type": "object", "properties": {}},
                 }
             )
         return converted

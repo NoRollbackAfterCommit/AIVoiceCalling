@@ -89,8 +89,10 @@ class ConversationAgent:
         if len(self._history) <= limit:
             return [self._system, *self._history, *tail]
         window = self._history[-limit:]
-        while window and window[0].role in ("tool", "assistant") and not (
-            window[0].role == "assistant" and window[0].content
+        while (
+            window
+            and window[0].role in ("tool", "assistant")
+            and not (window[0].role == "assistant" and window[0].content)
         ):
             window.pop(0)
         return [self._system, *window, *tail]

@@ -63,8 +63,22 @@ def test_the_default_voice_is_a_speaker_bulbul_actually_accepts():
     """Verified live on 2026-08-08: the API rejects an unknown speaker with a
     400, so a bad default would fail every single call."""
     valid_bulbul_v3 = {
-        "aditya", "ritu", "ashutosh", "priya", "neha", "rahul", "pooja", "rohan",
-        "simran", "kavya", "amit", "dev", "ishita", "shreya", "ratan", "varun",
+        "aditya",
+        "ritu",
+        "ashutosh",
+        "priya",
+        "neha",
+        "rahul",
+        "pooja",
+        "rohan",
+        "simran",
+        "kavya",
+        "amit",
+        "dev",
+        "ishita",
+        "shreya",
+        "ratan",
+        "varun",
     }
     language, _, speaker = Settings().sarvam_voice.partition(":")
     assert language == "hi-IN"

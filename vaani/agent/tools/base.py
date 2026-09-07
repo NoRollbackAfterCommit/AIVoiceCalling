@@ -122,9 +122,7 @@ class ToolRegistry:
         names = allowed if allowed is not None else self.names()
         return [self._tools[n].to_wire() for n in names if n in self._tools]
 
-    async def invoke(
-        self, name: str, arguments: dict[str, Any], ctx: ToolContext
-    ) -> ToolResult:
+    async def invoke(self, name: str, arguments: dict[str, Any], ctx: ToolContext) -> ToolResult:
         tool = self._tools.get(name)
         if tool is None:
             # Small models hallucinate tool names. Tell the model, don't crash.
@@ -144,9 +142,7 @@ class ToolRegistry:
             )
 
         try:
-            result = await asyncio.wait_for(
-                _call(tool.fn, arguments, ctx), timeout=tool.timeout_s
-            )
+            result = await asyncio.wait_for(_call(tool.fn, arguments, ctx), timeout=tool.timeout_s)
         except TimeoutError:
             log.warning("tool timeout", extra={"tool": name, "timeout_s": tool.timeout_s})
             return ToolResult(

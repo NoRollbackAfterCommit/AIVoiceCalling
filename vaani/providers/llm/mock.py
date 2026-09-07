@@ -16,14 +16,22 @@ from typing import Any
 from vaani.providers.base import Completion, Message, ToolCall
 
 _RULES: list[tuple[str, str]] = [
-    (r"\b(hello|hi|namaste|good (morning|afternoon|evening))\b",
-     "Namaste. You have reached the citizen helpline. How may I help you today?"),
-    (r"\b(bye|thank you|thanks|that is all|that's all)\b",
-     "Thank you for calling. Have a good day."),
-    (r"\b(complaint|complain|issue|problem|fault)\b",
-     "I can register that complaint for you. May I have your registered mobile number?"),
-    (r"\b(agent|human|executive|supervisor|officer)\b",
-     "Certainly, I am transferring you to a human executive. Please stay on the line."),
+    (
+        r"\b(hello|hi|namaste|good (morning|afternoon|evening))\b",
+        "Namaste. You have reached the citizen helpline. How may I help you today?",
+    ),
+    (
+        r"\b(bye|thank you|thanks|that is all|that's all)\b",
+        "Thank you for calling. Have a good day.",
+    ),
+    (
+        r"\b(complaint|complain|issue|problem|fault)\b",
+        "I can register that complaint for you. May I have your registered mobile number?",
+    ),
+    (
+        r"\b(agent|human|executive|supervisor|officer)\b",
+        "Certainly, I am transferring you to a human executive. Please stay on the line.",
+    ),
 ]
 
 
@@ -45,9 +53,7 @@ class MockLLM:
         max_tokens: int | None = None,
     ) -> Completion:
         await asyncio.sleep(0.05)
-        last_user = next(
-            (m.content for m in reversed(messages) if m.role == "user"), ""
-        ).lower()
+        last_user = next((m.content for m in reversed(messages) if m.role == "user"), "").lower()
 
         # If knowledge search is available and the caller asked something factual,
         # call the tool exactly once — the runtime then feeds the result back and

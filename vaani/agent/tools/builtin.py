@@ -46,9 +46,7 @@ async def search_knowledge(query: str, ctx: ToolContext) -> ToolResult:
 
     hits = await retriever.search(query, agent_key=ctx.agent_key)
     if not hits:
-        return ToolResult(
-            content="No relevant information found in the knowledge base.", ok=False
-        )
+        return ToolResult(content="No relevant information found in the knowledge base.", ok=False)
 
     # Numbered passages with sources: the model can cite, and a reviewer can
     # trace any spoken claim back to the document it came from.
@@ -330,8 +328,12 @@ async def register_complaint(
             f"{_spoken_digits(ref[3:])}. Read it back slowly, digit by digit, and "
             f"tell the caller it will be actioned within three working days."
         ),
-        data={"reference": ref, "category": category, "description": description,
-              "address": address},
+        data={
+            "reference": ref,
+            "category": category,
+            "description": description,
+            "address": address,
+        },
     )
 
 

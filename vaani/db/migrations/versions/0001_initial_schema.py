@@ -75,9 +75,7 @@ def upgrade() -> None:
             sa.Column("language", sa.String(16), nullable=True),
             sa.Column("stt_ms", sa.Integer(), nullable=False, server_default="0"),
             sa.Column("agent_ms", sa.Integer(), nullable=False, server_default="0"),
-            sa.Column(
-                "tts_first_chunk_ms", sa.Integer(), nullable=False, server_default="0"
-            ),
+            sa.Column("tts_first_chunk_ms", sa.Integer(), nullable=False, server_default="0"),
             sa.Column("total_ms", sa.Integer(), nullable=False, server_default="0"),
             sa.Column("barged_in", sa.Boolean(), nullable=False, server_default=sa.false()),
         )
