@@ -130,6 +130,30 @@ class CallRecord:
         }
 
 
+class _MonitoredTransport:
+    """Passes everything through, mirroring events to supervisors.
+
+    Only events, never audio. Copying every audio frame to every watcher would
+    multiply bandwidth by the number of supervisors for no benefit — a dashboard
+    shows state and transcript, not waveforms.
+    """
+
+    def __init__(self, inner: Transport, hub: Any, call_id: str) -> None:
+        self._inner = inner
+        self._hub = hub
+        self._call_id = call_id
+
+    async def send_audio(self, pcm: bytes) -> None:
+        await self._inner.send_audio(pcm)
+
+    async def send_event(self, event: dict[str, Any]) -> None:
+        self._hub.publish(self._call_id, event)
+        await self._inner.send_event(event)
+
+    async def close(self) -> None:
+        await self._inner.close()
+
+
 class CallSession:
     def __init__(
         self,
@@ -143,7 +167,11 @@ class CallSession:
         settings: Settings | None = None,
     ) -> None:
         self.call_id = call_id or uuid.uuid4().hex[:16]
-        self._transport = transport
+        # Wrapped once rather than tapped at each send site: there are a dozen
+        # of those and a supervisor silently missing one kind of event is worse
+        # than not watching at all.
+        hub = getattr(services, "monitor", None)
+        self._transport = _MonitoredTransport(transport, hub, self.call_id) if hub else transport
         self._services = services
         self._settings = settings or services.settings
         self._profile = services.profile(agent_key)

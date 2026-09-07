@@ -13,13 +13,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from vaani.api import routes, ws_voice
+from vaani.api import routes, ws_monitor, ws_voice
 from vaani.api import settings as settings_api
 from vaani.config import Settings, get_settings
 from vaani.core.logging import configure_logging, get_logger
 from vaani.core.registry import build_services
 from vaani.db.repository import CallRepository
 from vaani.pipeline.manager import CallManager
+from vaani.pipeline.monitor import MonitorHub
 from vaani.settings_store import SettingsStore
 
 log = get_logger(__name__)
@@ -39,9 +40,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     repository = CallRepository(settings.database_url)
     await repository.start()
     services.calls = repository
-    retention = asyncio.create_task(
-        _enforce_retention(repository, settings), name="retention"
-    )
+    services.monitor = MonitorHub()
+    retention = asyncio.create_task(_enforce_retention(repository, settings), name="retention")
     await services.start()
 
     app.state.services = services
@@ -88,7 +88,8 @@ async def _seed_knowledge(services) -> None:
     if not folder.is_dir():
         return
     paths = [
-        p for p in folder.rglob("*")
+        p
+        for p in folder.rglob("*")
         if p.is_file() and p.suffix.lower() in {".txt", ".md", ".pdf", ".docx", ".html"}
     ]
     if not paths:
@@ -124,6 +125,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(routes.router, prefix="/api")
     app.include_router(settings_api.router, prefix="/api")
     app.include_router(ws_voice.router)
+    app.include_router(ws_monitor.router)
 
     static_dir = Path(__file__).parent / "web" / "static"
     if static_dir.is_dir():

@@ -92,9 +92,7 @@ def build_tts(s: Settings) -> TTSProvider:
     if s.tts_provider == "piper":
         from vaani.providers.tts.piper import PiperTTS
 
-        return PiperTTS(
-            voices_dir=s.tts_voices_dir, default_voice=s.tts_voice, speed=s.tts_speed
-        )
+        return PiperTTS(voices_dir=s.tts_voices_dir, default_voice=s.tts_voice, speed=s.tts_speed)
     if s.tts_provider == "openai":
         from vaani.providers.openai_hosted import OpenAITTS
 
@@ -159,6 +157,9 @@ class Services:
     profiles: dict[str, AgentProfile]
     # Optional so a bare install still places calls with nothing persisted.
     calls: Any = None
+    # Fan-out of call events to supervisor dashboards. Optional for the same
+    # reason: a call must work with nobody watching.
+    monitor: Any = None
 
     def profile(self, key: str) -> AgentProfile:
         return self.profiles.get(key) or self.profiles["default"]
@@ -207,41 +208,76 @@ class Services:
         def changed(*keys: str) -> bool:
             return any(getattr(old, k) != getattr(new, k) for k in keys)
 
-        if changed("stt_provider", "stt_model", "stt_device", "stt_compute_type",
-                   "stt_language", "openai_api_key", "openai_base_url",
-                   "sarvam_api_key", "sarvam_stt_model"):
+        if changed(
+            "stt_provider",
+            "stt_model",
+            "stt_device",
+            "stt_compute_type",
+            "stt_language",
+            "openai_api_key",
+            "openai_base_url",
+            "sarvam_api_key",
+            "sarvam_stt_model",
+        ):
             provider = build_stt(new)
             await provider.start()
             previous, self.stt = self.stt, provider
             await _quiet_close(previous)
             rebuilt.append("stt")
 
-        if changed("llm_provider", "llm_base_url", "llm_model", "llm_temperature",
-                   "llm_max_tokens", "llm_timeout_s", "anthropic_api_key",
-                   "anthropic_model", "anthropic_effort", "openai_api_key",
-                   "openai_model", "openai_base_url"):
+        if changed(
+            "llm_provider",
+            "llm_base_url",
+            "llm_model",
+            "llm_temperature",
+            "llm_max_tokens",
+            "llm_timeout_s",
+            "anthropic_api_key",
+            "anthropic_model",
+            "anthropic_effort",
+            "openai_api_key",
+            "openai_model",
+            "openai_base_url",
+        ):
             provider = build_llm(new)
             await provider.start()
             previous, self.llm = self.llm, provider
             await _quiet_close(previous)
             rebuilt.append("llm")
 
-        if changed("tts_provider", "tts_voice", "tts_voices_dir", "tts_speed",
-                   "tts_model", "openai_api_key", "openai_base_url",
-                   "sarvam_api_key", "sarvam_tts_model", "sarvam_voice"):
+        if changed(
+            "tts_provider",
+            "tts_voice",
+            "tts_voices_dir",
+            "tts_speed",
+            "tts_model",
+            "openai_api_key",
+            "openai_base_url",
+            "sarvam_api_key",
+            "sarvam_tts_model",
+            "sarvam_voice",
+        ):
             provider = build_tts(new)
             await provider.start()
             previous, self.tts = self.tts, provider
             await _quiet_close(previous)
             rebuilt.append("tts")
 
-        if changed("vector_store", "qdrant_url", "qdrant_api_key",
-                   "embedding_provider", "embedding_model", "embedding_dim"):
+        if changed(
+            "vector_store",
+            "qdrant_url",
+            "qdrant_api_key",
+            "embedding_provider",
+            "embedding_model",
+            "embedding_dim",
+        ):
             # This one does discard the in-memory index — the vectors are not
             # portable across embedding models, so there is nothing to carry.
             retriever = Retriever(
-                store=build_store(new), embedder=build_embedder(new),
-                top_k=new.rag_top_k, min_score=new.rag_min_score,
+                store=build_store(new),
+                embedder=build_embedder(new),
+                top_k=new.rag_top_k,
+                min_score=new.rag_min_score,
             )
             await retriever.start()
             self.retriever = retriever

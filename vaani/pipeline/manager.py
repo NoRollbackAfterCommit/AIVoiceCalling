@@ -36,15 +36,17 @@ class CallManager:
         return len(self._live)
 
     @property
+    def capacity(self) -> int:
+        return self._max
+
+    @property
     def at_capacity(self) -> bool:
         return len(self._live) >= self._max
 
     async def register(self, session: CallSession) -> None:
         async with self._lock:
             if len(self._live) >= self._max:
-                raise CallCapacityError(
-                    f"all {self._max} lines are busy"
-                )
+                raise CallCapacityError(f"all {self._max} lines are busy")
             self._live[session.call_id] = session
             self.total_calls += 1
 
@@ -108,9 +110,7 @@ class CallManager:
             "avg_turn_latency_ms": round(sum(latencies) / len(latencies)) if latencies else 0,
             "p95_turn_latency_ms": _percentile(latencies, 0.95),
             "avg_turns_per_call": (
-                round(sum(len(r.turns) for r in completed) / len(completed), 1)
-                if completed
-                else 0
+                round(sum(len(r.turns) for r in completed) / len(completed), 1) if completed else 0
             ),
             "escalation_rate": (
                 round(outcomes.get("transferred", 0) / max(len(self._history), 1), 3)
