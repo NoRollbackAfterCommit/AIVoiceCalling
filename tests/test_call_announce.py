@@ -1,0 +1,124 @@
+"""Asterisk tells Vaani who is calling before the audio socket opens.
+
+AudioSocket carries a UUID and nothing else, so the caller's number and the
+helpline they dialled have to arrive by a side channel. The dialplan posts them
+under the same UUID it then passes to AudioSocket(); the bridge claims that
+announcement when the socket connects.
+"""
+
+from __future__ import annotations
+
+import uuid
+
+import httpx
+
+from vaani.telephony.announce import CallAnnouncements
+
+
+def test_claim_returns_what_was_announced_exactly_once():
+    reg = CallAnnouncements()
+    call_uuid = str(uuid.uuid4())
+    reg.announce(call_uuid, caller_number="+919876543210", agent_key="pension")
+
+    first = reg.claim(call_uuid)
+    assert first is not None
+    assert first.caller_number == "+919876543210"
+    assert first.agent_key == "pension"
+    assert reg.claim(call_uuid) is None, "a claim is one-shot; a replayed UUID gets nothing"
+
+
+def test_unknown_uuid_claims_nothing():
+    assert CallAnnouncements().claim(str(uuid.uuid4())) is None
+
+
+def test_expired_announcement_is_not_claimable():
+    now = [1000.0]
+    reg = CallAnnouncements(ttl_s=30, clock=lambda: now[0])
+    call_uuid = str(uuid.uuid4())
+    reg.announce(call_uuid, caller_number="+911234567890")
+
+    now[0] += 31
+    assert reg.claim(call_uuid) is None, "a dialplan that never connected must not leak an entry"
+
+
+def test_uuid_spelling_does_not_matter():
+    reg = CallAnnouncements()
+    canonical = str(uuid.uuid4())
+    reg.announce(canonical.upper().replace("-", ""), caller_number="+911111111111")
+
+    claimed = reg.claim(canonical)
+    assert claimed is not None and claimed.caller_number == "+911111111111"
+
+
+def _app_with_registry():
+    from vaani.main import create_app
+
+    app = create_app()
+    # The lifespan is what normally installs this; ASGITransport does not run
+    # lifespans, so the test wires the one object the route needs.
+    app.state.announcements = CallAnnouncements()
+    return app
+
+
+async def test_announce_endpoint_accepts_asterisks_form_post():
+    app = _app_with_registry()
+    call_uuid = str(uuid.uuid4())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        # Exactly what CURL() in the dialplan sends: url-encoded form fields.
+        resp = await client.post(
+            "/api/telephony/announce",
+            data={
+                "uuid": call_uuid,
+                "caller": "+919876543210",
+                "did": "1800123",
+                "agent": "pension",
+            },
+        )
+    assert resp.status_code == 200, resp.text
+
+    claimed = app.state.announcements.claim(call_uuid)
+    assert claimed is not None
+    assert claimed.caller_number == "+919876543210"
+    assert claimed.agent_key == "pension"
+    assert claimed.dialled_number == "1800123"
+
+
+async def test_announce_endpoint_restores_a_plus_lost_to_form_decoding():
+    # A dialplan that forgets URIENCODE() sends "+91..." raw; form decoding turns
+    # the plus into a space. The number is still recoverable, so recover it.
+    app = _app_with_registry()
+    call_uuid = str(uuid.uuid4())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/telephony/announce",
+            content=f"uuid={call_uuid}&caller=+919876543210",
+            headers={"content-type": "application/x-www-form-urlencoded"},
+        )
+    assert resp.status_code == 200, resp.text
+    claimed = app.state.announcements.claim(call_uuid)
+    assert claimed is not None and claimed.caller_number == "+919876543210"
+
+
+async def test_announce_endpoint_treats_withheld_caller_as_unknown():
+    app = _app_with_registry()
+    call_uuid = str(uuid.uuid4())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post("/api/telephony/announce", data={"uuid": call_uuid, "caller": ""})
+    assert resp.status_code == 200
+    claimed = app.state.announcements.claim(call_uuid)
+    assert claimed is not None and claimed.caller_number is None
+
+
+async def test_announce_endpoint_rejects_a_malformed_uuid():
+    app = _app_with_registry()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post("/api/telephony/announce", data={"uuid": "not-a-uuid"})
+    assert resp.status_code == 422

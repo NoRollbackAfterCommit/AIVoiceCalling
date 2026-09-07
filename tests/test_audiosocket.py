@@ -66,3 +66,42 @@ async def test_server_answers_greets_and_releases_the_line(services, settings):
         writer.close()
     finally:
         await server.stop()
+
+
+async def test_announced_call_carries_caller_and_agent(services, settings):
+    """The dialplan posts caller and agent under the UUID it hands to AudioSocket();
+    the session opened for that UUID must carry both."""
+    from vaani.telephony.announce import CallAnnouncements
+
+    announcements = CallAnnouncements()
+    manager = CallManager(max_concurrent=2)
+    server = AudioSocketServer(
+        services,
+        manager,
+        host="127.0.0.1",
+        port=0,
+        settings=settings,
+        announcements=announcements,
+    )
+    await server.start()
+    try:
+        call_uuid = uuid.uuid4()
+        announcements.announce(str(call_uuid), caller_number="+919876543210", agent_key="pension")
+
+        _reader, writer = await asyncio.open_connection("127.0.0.1", server.port)
+        writer.write(struct.pack(">BH", TYPE_UUID, 16) + call_uuid.bytes)
+        await writer.drain()
+
+        for _ in range(200):
+            await asyncio.sleep(0.02)
+            if manager.live_count:
+                break
+        (live,) = manager.live()
+        assert live["caller_number"] == "+919876543210"
+        assert live["agent_key"] == "pension"
+
+        writer.write(struct.pack(">BH", TYPE_HANGUP, 0))
+        await writer.drain()
+        writer.close()
+    finally:
+        await server.stop()

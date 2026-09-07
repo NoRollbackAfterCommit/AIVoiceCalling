@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from vaani.api import routes, ws_monitor, ws_voice
 from vaani.api import settings as settings_api
+from vaani.api import telephony as telephony_api
 from vaani.config import Settings, get_settings
 from vaani.core.logging import configure_logging, get_logger
 from vaani.core.registry import build_services
@@ -22,6 +23,7 @@ from vaani.db.repository import CallRepository
 from vaani.pipeline.manager import CallManager
 from vaani.pipeline.monitor import MonitorHub
 from vaani.settings_store import SettingsStore
+from vaani.telephony.announce import CallAnnouncements
 
 log = get_logger(__name__)
 
@@ -46,6 +48,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     app.state.services = services
     app.state.calls = CallManager(max_concurrent=settings.max_concurrent_calls)
+    # Always present, bridge or not: the announce route must answer the
+    # dialplan even while an operator is still switching telephony on.
+    app.state.announcements = CallAnnouncements()
 
     telephony = None
     if settings.audiosocket_enabled:
@@ -59,6 +64,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             host=settings.audiosocket_host,
             port=settings.audiosocket_port,
             settings=settings,
+            announcements=app.state.announcements,
         )
         await telephony.start()
 
@@ -143,6 +149,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(routes.router, prefix="/api")
     app.include_router(settings_api.router, prefix="/api")
+    app.include_router(telephony_api.router, prefix="/api")
     app.include_router(ws_voice.router)
     app.include_router(ws_monitor.router)
 

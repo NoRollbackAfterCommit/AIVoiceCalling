@@ -87,15 +87,33 @@ match = sip.your-carrier.in      ; accept INVITEs from the carrier only
 ```ini
 [vaani-inbound]
 exten => _X.,1,Answer()
- same  =>      ,Set(CALL_UUID=${UUID()})
- same  =>      ,AudioSocket(${CALL_UUID},VAANI_HOST:9092)
- same  =>      ,Hangup()
+ same  => n,Set(CALL_UUID=${UUID()})
+ same  => n,Set(R=${CURL(http://VAANI_HOST:8080/api/telephony/announce,uuid=${CALL_UUID}&caller=${URIENCODE(${CALLERID(num)})}&did=${EXTEN})})
+ same  => n,AudioSocket(${CALL_UUID},VAANI_HOST:9092)
+ same  => n,Hangup()
 ```
 
 Replace `VAANI_HOST` with the address Vaani listens on. When both run on the
-same machine, `127.0.0.1:9092`. Asterisk sends 8 kHz signed-linear audio down
+same machine, `127.0.0.1`. Asterisk sends 8 kHz signed-linear audio down
 that socket; Vaani converts to its 16 kHz pipeline format at this edge and
 nowhere else.
+
+The `CURL()` line tells Vaani who is calling. AudioSocket itself carries only
+the UUID, so without it every call is answered by the default agent and the
+call record has no caller number — which means no number to ring back when
+the agent promises a callback. The announce accepts:
+
+| Field | Value | Effect |
+|---|---|---|
+| `uuid` | the same `${CALL_UUID}` passed to `AudioSocket()` | required; pairs the announce with the socket |
+| `caller` | `${CALLERID(num)}` | stored on the call record, visible to tools and the live console |
+| `did` | `${EXTEN}`, the number dialled | logged; useful when one trunk carries several numbers |
+| `agent` | an agent profile key | which profile answers; unknown keys fall back to `default` |
+
+One Asterisk box fronting several helplines gives each DID its own `agent=`
+in the dialplan, so routing stays where the rest of the telephony
+configuration already is. `func_curl` is in the standard Asterisk package. An
+announce that is never followed by a socket expires after a minute.
 
 ## Vaani setup
 
@@ -120,7 +138,7 @@ same machine or VLAN.
 | 5060 | UDP/TCP | carrier ⇄ Asterisk | SIP signalling |
 | 10000–20000 | UDP | carrier ⇄ Asterisk | RTP media (range per carrier) |
 | 9092 | TCP | Asterisk → Vaani | AudioSocket, LAN only |
-| 8080 | TCP | operators → Vaani | web console/API, not the carrier |
+| 8080 | TCP | operators and Asterisk → Vaani | web console/API and the call announce, not the carrier |
 
 ## Testing before the trunk exists
 

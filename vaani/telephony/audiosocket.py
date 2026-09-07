@@ -22,8 +22,14 @@ Wire format, per message:
 Dialplan:
 
     exten => 1912,1,Answer()
-     same  =>       ,AudioSocket(${UUID},vaani-host:9092)
-     same  =>       ,Hangup()
+     same  => n,Set(CALL_UUID=${UUID()})
+     same  => n,Set(R=${CURL(http://vaani-host:8080/api/telephony/announce,uuid=${CALL_UUID}&caller=${URIENCODE(${CALLERID(num)})}&did=${EXTEN})})
+     same  => n,AudioSocket(${CALL_UUID},vaani-host:9092)
+     same  => n,Hangup()
+
+The CURL line is optional. AudioSocket itself carries only the UUID, so without
+it the default agent answers and the record has no caller number; see
+vaani.telephony.announce.
 
 Asterisk speaks 8 kHz; the pipeline speaks 16 kHz. Conversion happens here and
 nowhere else.
@@ -44,6 +50,7 @@ from vaani.core.logging import get_logger
 from vaani.core.registry import Services
 from vaani.pipeline.manager import CallCapacityError, CallManager
 from vaani.pipeline.session import CallSession
+from vaani.telephony.announce import CallAnnouncements
 
 log = get_logger(__name__)
 
@@ -134,6 +141,7 @@ class AudioSocketServer:
         port: int = 9092,
         agent_key: str = "default",
         settings: Settings | None = None,
+        announcements: CallAnnouncements | None = None,
     ) -> None:
         self._services = services
         self._manager = manager
@@ -141,6 +149,7 @@ class AudioSocketServer:
         self._port = port
         self._agent_key = agent_key
         self._settings = settings or services.settings
+        self._announcements = announcements
         self._server: asyncio.AbstractServer | None = None
 
     async def start(self) -> None:
@@ -178,11 +187,28 @@ class AudioSocketServer:
 
                 if kind == TYPE_UUID:
                     call_uuid = str(uuid.UUID(bytes=payload)) if len(payload) == 16 else None
-                    log.info("inbound call", extra={"peer": str(peer), "uuid": call_uuid})
+                    announced = (
+                        self._announcements.claim(call_uuid)
+                        if self._announcements is not None and call_uuid
+                        else None
+                    )
+                    caller_number = announced.caller_number if announced else None
+                    agent_key = (announced and announced.agent_key) or self._agent_key
+                    log.info(
+                        "inbound call",
+                        extra={
+                            "peer": str(peer),
+                            "uuid": call_uuid,
+                            "caller": caller_number,
+                            "agent": agent_key,
+                            "announced": announced is not None,
+                        },
+                    )
                     session = CallSession(
                         transport=transport,
                         services=self._services,
-                        agent_key=self._agent_key,
+                        agent_key=agent_key,
+                        caller_number=caller_number,
                         call_id=(call_uuid or uuid.uuid4().hex)[:16],
                         direction="inbound",
                         settings=self._settings,
