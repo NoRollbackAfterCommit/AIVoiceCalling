@@ -86,6 +86,18 @@ class Settings(BaseSettings):
     )
     host: str = cfg("0.0.0.0", group="Service", label="Bind address")
     port: int = cfg(8080, group="Service", label="Port", ge=1, le=65535)
+    api_token: str | None = cfg(
+        None,
+        group="Service",
+        label="API token",
+        secret=True,
+        # Read per request by the guard, so a change needs no provider rebuild.
+        restart=False,
+        help="When set, every /api and /ws request must present it: "
+        "'Authorization: Bearer' on HTTP, '?token=' on a WebSocket. Health, readiness "
+        "and the Asterisk announce stay open. Empty leaves the API open, which the "
+        "laptop demo relies on; a production deployment refuses to boot that way.",
+    )
     log_level: str = cfg(
         "INFO",
         group="Service",

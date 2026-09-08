@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sys
 from contextvars import ContextVar
 from typing import Any
@@ -72,6 +73,26 @@ def configure_logging(level: str = "INFO") -> None:
         lg = logging.getLogger(name)
         lg.handlers[:] = []
         lg.propagate = True
+    access = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, _RedactQueryTokens) for f in access.filters):
+        access.addFilter(_RedactQueryTokens())
+
+
+_TOKEN_IN_QUERY = re.compile(r"(token=)[^&\s\"']+")
+
+
+class _RedactQueryTokens(logging.Filter):
+    """A WebSocket handshake carries the API token in its query string, which
+    is the one place a browser can put it. The access line must not write it
+    to disk on every call."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = _TOKEN_IN_QUERY.sub(r"\1***", str(record.msg))
+        if record.args:
+            record.args = tuple(
+                _TOKEN_IN_QUERY.sub(r"\1***", a) if isinstance(a, str) else a for a in record.args
+            )
+        return True
 
 
 def get_logger(name: str) -> logging.LoggerAdapter:

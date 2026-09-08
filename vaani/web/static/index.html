@@ -80,6 +80,7 @@
   }
   .note { font-size: 12px; color: var(--dim); padding: 0 16px 14px; }
 </style>
+<script src="/static/auth.js"></script>
 </head>
 <body>
 <header>
@@ -207,8 +208,7 @@ async function startCall() {
   await ctx.audioWorklet.addModule(
     URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' })));
 
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws/call?agent=${encodeURIComponent(el('agent').value)}`);
+  ws = new WebSocket(vaaniAuth.wsUrl(`/ws/call?agent=${encodeURIComponent(el('agent').value)}`));
   ws.binaryType = 'arraybuffer';
 
   ws.onopen = () => {

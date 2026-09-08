@@ -266,7 +266,8 @@ before.
 
 - `MemoryVectorStore` is a brute-force scan. Correct and fast to a few thousand
   chunks; use Qdrant beyond that.
-- No authentication on the API. Do not expose this to a network before phase 6.
+- API access is a single shared bearer token (`VAANI_API_TOKEN`); per-user accounts and
+  roles are phase 6.
 - Whisper is not a streaming model, so STT latency is paid per turn rather than
   continuously. Interim transcripts are available but cost GPU.
 

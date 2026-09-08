@@ -79,6 +79,9 @@ flip):
 | `test-writer` | `sonnet` | Coverage for a module with a written brief; mocks only |
 | `realtime-audit` | `opus` | Step 5 for anything under `vaani/pipeline`, `vaani/audio`, `vaani/api/ws_voice.py`, or a provider's call-path methods. A review never routes down |
 
+An agent added to `.claude/agents/` mid-session is not dispatchable until the next session
+starts. Until then, send the same brief to `general-purpose` with the same `model:`.
+
 **A skill has no model of its own.** `superpowers:*`, `project-conventions`,
 `add-provider`, `code-review`, `security-review`, `simplify` all run on the session model
 when invoked inline. That is fine for the dialogue steps and wrong for the build step,

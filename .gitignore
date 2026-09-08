@@ -26,3 +26,6 @@ htmlcov/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# SSH keys never belong in the repository.
+*.pem

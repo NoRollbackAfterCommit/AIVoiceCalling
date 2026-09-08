@@ -1,0 +1,17 @@
+# The Dockerfile copies only pyproject.toml, README.md, vaani/ and scripts/, but
+# the whole context is still uploaded to the daemon first. Keep the venv, the
+# data volumes and, above all, any SSH key out of it.
+.git
+.venv
+data
+models
+docs
+tests
+deploy
+*.pem
+.env
+.env.*
+!.env.example
+__pycache__
+*.pyc
+.claude

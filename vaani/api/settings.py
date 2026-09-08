@@ -16,6 +16,8 @@ from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException, Request
 
+from vaani.api.auth import check_api_token
+from vaani.config import Settings
 from vaani.core.logging import get_logger
 from vaani.providers.base import Message
 from vaani.settings_store import SettingsError
@@ -59,6 +61,9 @@ async def update(request: Request, patch: dict[str, Any] = Body(...)) -> dict[st
             f"or resend with _force to apply anyway.",
         )
 
+    _refuse_opening_production(
+        store.settings, **{k: patch[k] for k in ("api_token", "env") if k in patch}
+    )
     try:
         changed = store.update(patch)
     except SettingsError as exc:
@@ -94,9 +99,26 @@ async def reset(
     """Drop overrides and fall back to the environment baseline."""
     store = request.app.state.settings_store
     services = request.app.state.services
+    baseline = Settings()
+    _refuse_opening_production(
+        store.settings,
+        **{k: getattr(baseline, k) for k in ("api_token", "env") if keys is None or k in keys},
+    )
     removed = store.reset(keys)
     rebuilt = await services.reload(store.settings) if removed else []
     return {"reset": removed, "rebuilt": rebuilt, "values": store.public_values()}
+
+
+def _refuse_opening_production(current: Settings, **would_be: Any) -> None:
+    """Checked before the store changes, not after: rolling back afterwards
+    would drop the previous override along with the rejected value, leaving
+    production with no token at all."""
+    if not would_be:
+        return
+    try:
+        check_api_token(current.model_copy(update=would_be))
+    except RuntimeError as exc:
+        raise HTTPException(422, {"message": str(exc), "errors": {"api_token": str(exc)}}) from exc
 
 
 @router.post("/test")

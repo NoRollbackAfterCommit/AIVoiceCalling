@@ -131,6 +131,11 @@ can place a call. The network is the access control. Bind to a LAN interface,
 keep the port firewalled from the internet, and put Asterisk and Vaani on the
 same machine or VLAN.
 
+If `VAANI_API_TOKEN` is set, `/api/telephony/announce` stays reachable without
+it — it's LAN-only like AudioSocket itself, and a token there would only end
+up sitting in cleartext in the dialplan file. Keep port 8080 firewalled to the
+LAN as the table below says; that's the actual access control for this route.
+
 ## Firewall
 
 | Port | Protocol | Direction | Who |
@@ -138,7 +143,7 @@ same machine or VLAN.
 | 5060 | UDP/TCP | carrier ⇄ Asterisk | SIP signalling |
 | 10000–20000 | UDP | carrier ⇄ Asterisk | RTP media (range per carrier) |
 | 9092 | TCP | Asterisk → Vaani | AudioSocket, LAN only |
-| 8080 | TCP | operators and Asterisk → Vaani | web console/API and the call announce, not the carrier |
+| 8080 | TCP | operators and Asterisk → Vaani | web console/API and the call announce (announce is exempt from `VAANI_API_TOKEN`), not the carrier |
 
 ## Testing before the trunk exists
 

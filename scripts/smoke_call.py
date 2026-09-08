@@ -4,7 +4,7 @@ Verifies the media plane without a microphone: connects to /ws/call, streams
 generated speech-shaped audio in real time, and asserts that the agent greets,
 transcribes, replies with audio, and can be interrupted mid-sentence.
 
-    python scripts/smoke_call.py [--url ws://localhost:8099/ws/call]
+    python scripts/smoke_call.py [--url ws://localhost:8099/ws/call] [--token TOKEN]
 """
 
 from __future__ import annotations
@@ -13,8 +13,10 @@ import argparse
 import asyncio
 import json
 import math
+import os
 import struct
 import sys
+from urllib.parse import quote
 
 SAMPLE_RATE = 16_000
 FRAME_MS = 20
@@ -45,6 +47,12 @@ async def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="ws://localhost:8099/ws/call?agent=default")
     parser.add_argument("--turns", type=int, default=2)
+    parser.add_argument(
+        "--token",
+        default=os.environ.get("VAANI_API_TOKEN", ""),
+        help="VAANI_API_TOKEN value; sent as ?token= on the handshake since a WebSocket "
+        "can't carry a header (default: $VAANI_API_TOKEN, empty means none)",
+    )
     args = parser.parse_args()
 
     try:
@@ -53,10 +61,15 @@ async def main() -> int:
         print("pip install websockets", file=sys.stderr)
         return 1
 
+    url = args.url
+    if args.token:
+        sep = "&" if "?" in url else "?"
+        url = f"{url}{sep}token={quote(args.token)}"
+
     received_audio = 0
     events: list[dict] = []
 
-    async with websockets.connect(args.url, max_size=None) as ws:
+    async with websockets.connect(url, max_size=None) as ws:
         await ws.send(json.dumps({"type": "start", "client": "smoke"}))
 
         async def listen() -> None:

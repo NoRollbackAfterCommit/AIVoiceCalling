@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from vaani.api import routes, ws_monitor, ws_voice
 from vaani.api import settings as settings_api
 from vaani.api import telephony as telephony_api
+from vaani.api.auth import TokenGuard, check_api_token
 from vaani.config import Settings, get_settings
 from vaani.core.logging import configure_logging, get_logger
 from vaani.core.registry import build_services
@@ -38,6 +39,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = store.settings
     app.state.settings_store = store
     app.state.settings = settings
+
+    # Refuses to boot in production without a token; warns everywhere else.
+    open_warning = check_api_token(settings)
+    if open_warning:
+        log.warning(open_warning)
 
     services = build_services(settings)
     repository = CallRepository(settings.database_url)
@@ -144,6 +150,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = settings
 
+    # Added before CORS so that CORS is the outer layer: a preflight OPTIONS
+    # carries no Authorization header and must be answered, not refused.
+    app.add_middleware(TokenGuard)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origin_list,
