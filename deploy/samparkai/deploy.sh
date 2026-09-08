@@ -23,9 +23,18 @@ echo "==> shipping $(git rev-parse --short HEAD)"
 git archive --format=tar HEAD | "${SSH[@]}" "tar -x -C $REMOTE_DIR"
 
 echo "==> building and starting"
-"${SSH[@]}" bash -s <<'REMOTE'
+"${SSH[@]}" TARGET_HOST="${TARGET#*@}" bash -s <<'REMOTE'
 set -euo pipefail
 cd /opt/samparkai/deploy/samparkai
+
+# The public address, for the bootstrap certificate Caddy serves on the bare
+# IP until DNS points the domain here. IMDSv2 first; fall back to the address
+# this deploy was aimed at.
+IMDS_TOKEN=$(curl -sS -m 2 -X PUT http://169.254.169.254/latest/api/token \
+             -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' 2>/dev/null || true)
+PUBLIC_IP=$(curl -sS -m 2 -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
+            http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || true)
+PUBLIC_IP=${PUBLIC_IP:-$TARGET_HOST}
 
 if [ ! -f .env ]; then
   TOKEN=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))' 2>/dev/null \
@@ -35,6 +44,7 @@ if [ ! -f .env ]; then
 VAANI_ENV=prod
 VAANI_API_TOKEN=$TOKEN
 VAANI_LOG_LEVEL=INFO
+PUBLIC_IP=$PUBLIC_IP
 # Hosted providers (Sarvam speech, the LLM) are set on the admin page at
 # /settings once logged in with the token; they persist in the data volume.
 # They can equally be set here and take effect on the next restart — see
@@ -42,6 +52,10 @@ VAANI_LOG_LEVEL=INFO
 ENV
   chmod 600 .env
   echo "generated .env with a fresh API token"
+else
+  # Keep the token; refresh the address in case the instance moved.
+  grep -q '^PUBLIC_IP=' .env && sed -i "s/^PUBLIC_IP=.*/PUBLIC_IP=$PUBLIC_IP/" .env \
+    || echo "PUBLIC_IP=$PUBLIC_IP" >> .env
 fi
 
 if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi
@@ -52,6 +66,7 @@ $DC ps
 echo
 echo "API token (also in /opt/samparkai/deploy/samparkai/.env):"
 grep '^VAANI_API_TOKEN=' .env | cut -d= -f2-
+echo
+echo "Console: https://$PUBLIC_IP/  (accept the one-time certificate warning)"
+echo "         https://samparkai.demosites.co.in/  once DNS points here"
 REMOTE
-
-echo "==> done. Open http://<public-ip>/ now; https://samparkai.demosites.co.in once DNS points here."

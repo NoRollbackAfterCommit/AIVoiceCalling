@@ -1,14 +1,23 @@
-# Until DNS points samparkai.demosites.co.in at this box, the console is
-# reachable over plain HTTP on the public IP through the first block. Once it
-# does, Caddy obtains and renews a Let's Encrypt certificate for the domain by
-# itself; the certificate attempts before that simply retry in the background.
-# WebSockets (the browser call and the supervisor feed) proxy without extra
-# configuration.
-
+# Nothing is served in the clear: the API token travels in a header on every
+# call and in the WebSocket handshake URL, and port 80 would hand both to
+# anyone on the path. Port 80 only redirects.
 http://:80 {
+	redir https://{host}{uri} permanent
+}
+
+# The real name. Caddy obtains and renews a Let's Encrypt certificate by
+# itself once DNS points samparkai.demosites.co.in at this box; until then the
+# attempts simply retry in the background. WebSockets (the browser call and
+# the supervisor feed) proxy without extra configuration.
+samparkai.demosites.co.in {
+	header Strict-Transport-Security "max-age=31536000"
 	reverse_proxy samparkai:8080
 }
 
-samparkai.demosites.co.in {
+# Before DNS: the bare public IP, encrypted with Caddy's own CA. The browser
+# warns once because nobody it trusts signed that certificate; the connection
+# is still TLS, which is what matters for the token.
+https://{$PUBLIC_IP} {
+	tls internal
 	reverse_proxy samparkai:8080
 }

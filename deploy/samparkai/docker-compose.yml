@@ -46,6 +46,11 @@ services:
     image: caddy:2-alpine
     container_name: samparkai-caddy
     restart: unless-stopped
+    environment:
+      # From .env beside this file (deploy.sh fills it in). The Caddyfile
+      # serves the bare IP over TLS with an internal certificate until DNS
+      # points the domain here.
+      PUBLIC_IP: ${PUBLIC_IP:?set PUBLIC_IP in .env}
     ports:
       - '80:80'
       - '443:443'

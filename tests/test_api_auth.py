@@ -11,6 +11,7 @@ anyway.
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import uuid
@@ -242,21 +243,21 @@ async def test_the_websocket_is_open_without_a_configured_token(services, settin
     assert (await _handshake(app, "/ws/monitor"))[0] == "websocket.accept"
 
 
-def test_the_access_log_redacts_the_websocket_token():
-    """The handshake is the one place the token rides in a URL; uvicorn's access
-    line would otherwise write it to disk on every browser call."""
+def test_the_log_stream_redacts_the_websocket_token():
+    """uvicorn writes the handshake line, query string included, on
+    uvicorn.error rather than uvicorn.access. Whichever logger carries it, the
+    token must not reach the stream."""
     configure_logging("INFO")
-    record = logging.LogRecord(
-        "uvicorn.access",
-        logging.INFO,
-        "",
-        0,
-        '%s - "%s %s HTTP/%s" %d',
-        ("10.0.0.1:1", "GET", f"/ws/call?agent=default&token={TOKEN}", "1.1", 101),
-        None,
+    stream = io.StringIO()
+    logging.getLogger().handlers[0].setStream(stream)
+
+    logging.getLogger("uvicorn.error").info(
+        '%s - "WebSocket %s" [accepted]', "10.0.0.1:1", f"/ws/call?agent=default&token={TOKEN}"
     )
-    for flt in logging.getLogger("uvicorn.access").filters:
-        assert flt.filter(record)
-    line = record.getMessage()
-    assert TOKEN not in line
-    assert "/ws/call?agent=default&token=" in line, "the rest of the line survives"
+    logging.getLogger("uvicorn.access").info(
+        '%s - "%s %s HTTP/%s" %d', "10.0.0.1:1", "GET", f"/api/x?api_token={TOKEN}", "1.1", 401
+    )
+
+    out = stream.getvalue()
+    assert TOKEN not in out
+    assert "token=***" in out, "the rest of the line survives"

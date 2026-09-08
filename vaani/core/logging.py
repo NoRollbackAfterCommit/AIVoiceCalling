@@ -64,6 +64,10 @@ class JsonFormatter(logging.Formatter):
 def configure_logging(level: str = "INFO") -> None:
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JsonFormatter())
+    # On the handler rather than on a logger: uvicorn writes HTTP lines to
+    # uvicorn.access but WebSocket handshakes, query string included, to
+    # uvicorn.error, and a filter on the wrong logger protects nothing.
+    handler.addFilter(_RedactQueryTokens())
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(level.upper())
@@ -73,18 +77,15 @@ def configure_logging(level: str = "INFO") -> None:
         lg = logging.getLogger(name)
         lg.handlers[:] = []
         lg.propagate = True
-    access = logging.getLogger("uvicorn.access")
-    if not any(isinstance(f, _RedactQueryTokens) for f in access.filters):
-        access.addFilter(_RedactQueryTokens())
 
 
-_TOKEN_IN_QUERY = re.compile(r"(token=)[^&\s\"']+")
+_TOKEN_IN_QUERY = re.compile(r"((?:access_|api_)?token=)[^&\s\"']+")
 
 
 class _RedactQueryTokens(logging.Filter):
     """A WebSocket handshake carries the API token in its query string, which
-    is the one place a browser can put it. The access line must not write it
-    to disk on every call."""
+    is the one place a browser can put it. The log line for that handshake
+    must not write it to disk on every call."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         record.msg = _TOKEN_IN_QUERY.sub(r"\1***", str(record.msg))
