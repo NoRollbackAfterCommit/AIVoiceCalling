@@ -1,0 +1,14 @@
+# Until DNS points samparkai.demosites.co.in at this box, the console is
+# reachable over plain HTTP on the public IP through the first block. Once it
+# does, Caddy obtains and renews a Let's Encrypt certificate for the domain by
+# itself; the certificate attempts before that simply retry in the background.
+# WebSockets (the browser call and the supervisor feed) proxy without extra
+# configuration.
+
+http://:80 {
+	reverse_proxy samparkai:8080
+}
+
+samparkai.demosites.co.in {
+	reverse_proxy samparkai:8080
+}

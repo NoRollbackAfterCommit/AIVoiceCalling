@@ -1,0 +1,63 @@
+# SamparkAI — the hosted-provider pilot on one AWS VM.
+#
+#   cd /opt/samparkai/deploy/samparkai
+#   docker compose up -d --build
+#
+# Two containers: the app, and Caddy in front of it terminating TLS for
+# samparkai.demosites.co.in. Nothing else — the hosted tier needs no GPU, no
+# Ollama, no Qdrant; Sarvam and the LLM are reached over HTTPS and the data
+# plane is SQLite in a volume. The app is not published directly: only Caddy
+# listens on the host, so the API token guard is the only way in.
+#
+# Runtime settings come from .env beside this file (see deploy.sh, which
+# generates it with a fresh API token). VAANI_ENV=prod there means the app
+# refuses to boot without that token.
+name: samparkai
+
+services:
+  samparkai:
+    build:
+      context: ../..
+    image: samparkai:latest
+    container_name: samparkai
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      VAANI_HOST: 0.0.0.0
+      VAANI_PORT: 8080
+      VAANI_DATABASE_URL: sqlite+aiosqlite:////app/data/vaani.db
+      # Telephony arrives later, with Asterisk on the same box; keep the
+      # bridge off until the trunk exists.
+      VAANI_AUDIOSOCKET_ENABLED: 'false'
+    expose:
+      - '8080'
+    volumes:
+      - samparkai-data:/app/data
+      - ../../knowledge:/app/knowledge:ro
+    healthcheck:
+      test: ['CMD', 'python', '-c',
+             "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/api/health')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 40s
+      retries: 3
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: samparkai-caddy
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - samparkai-caddy-data:/data
+      - samparkai-caddy-config:/config
+    depends_on:
+      - samparkai
+
+volumes:
+  samparkai-data:
+  samparkai-caddy-data:
+  samparkai-caddy-config:
