@@ -3,15 +3,17 @@
 #   cd /opt/samparkai/deploy/samparkai
 #   docker compose up -d --build
 #
-# Two containers: the app, and Caddy in front of it terminating TLS for
-# samparkai.demosites.co.in. Nothing else — the hosted tier needs no GPU, no
-# Ollama, no Qdrant; Sarvam and the LLM are reached over HTTPS and the data
-# plane is SQLite in a volume. The app is not published directly: only Caddy
-# listens on the host, so the API token guard is the only way in.
+# One container. The VM already runs a host-level Caddy for another site, and
+# that Caddy owns ports 80 and 443, so TLS for samparkai.demosites.co.in is a
+# site block added to it (caddy-site.conf, installed by deploy.sh) rather than
+# a second proxy. The app is published on loopback only: the host Caddy is the
+# only way in from outside, and behind it the API token guard is the only way
+# past the front page.
 #
-# Runtime settings come from .env beside this file (see deploy.sh, which
-# generates it with a fresh API token). VAANI_ENV=prod there means the app
-# refuses to boot without that token.
+# The hosted tier needs no GPU, no Ollama, no Qdrant; Sarvam and the LLM are
+# reached over HTTPS and the data plane is SQLite in a volume. Runtime settings
+# come from .env beside this file (deploy.sh generates it with a fresh API
+# token). VAANI_ENV=prod there means the app refuses to boot without one.
 name: samparkai
 
 services:
@@ -29,8 +31,9 @@ services:
       # Telephony arrives later, with Asterisk on the same box; keep the
       # bridge off until the trunk exists.
       VAANI_AUDIOSOCKET_ENABLED: 'false'
-    expose:
-      - '8080'
+    ports:
+      # Loopback only. 8080 is taken by the other site's frontend.
+      - '127.0.0.1:${SAMPARKAI_PORT:-8091}:8080'
     volumes:
       - samparkai-data:/app/data
       - ../../knowledge:/app/knowledge:ro
@@ -42,27 +45,5 @@ services:
       start_period: 40s
       retries: 3
 
-  caddy:
-    image: caddy:2-alpine
-    container_name: samparkai-caddy
-    restart: unless-stopped
-    environment:
-      # From .env beside this file (deploy.sh fills it in). The Caddyfile
-      # serves the bare IP over TLS with an internal certificate until DNS
-      # points the domain here.
-      PUBLIC_IP: ${PUBLIC_IP:?set PUBLIC_IP in .env}
-    ports:
-      - '80:80'
-      - '443:443'
-      - '443:443/udp'
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - samparkai-caddy-data:/data
-      - samparkai-caddy-config:/config
-    depends_on:
-      - samparkai
-
 volumes:
   samparkai-data:
-  samparkai-caddy-data:
-  samparkai-caddy-config:

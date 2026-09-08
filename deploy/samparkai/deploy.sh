@@ -5,8 +5,9 @@
 #
 # Ships exactly what is committed (git archive of HEAD: no venv, no data, no
 # keys), generates deploy/samparkai/.env on the box with a fresh API token the
-# first time, then builds and starts the stack. Re-running redeploys the
-# current HEAD and keeps the existing .env and data volume.
+# first time, adds the SamparkAI site to the host Caddy that already fronts
+# the box, then builds and starts the app. Re-running redeploys the current
+# HEAD and keeps the existing .env and data volume.
 set -euo pipefail
 
 TARGET=${1:?usage: deploy.sh user@host [key.pem]}
@@ -22,19 +23,10 @@ echo "==> preparing $REMOTE_DIR on $TARGET"
 echo "==> shipping $(git rev-parse --short HEAD)"
 git archive --format=tar HEAD | "${SSH[@]}" "tar -x -C $REMOTE_DIR"
 
-echo "==> building and starting"
-"${SSH[@]}" TARGET_HOST="${TARGET#*@}" bash -s <<'REMOTE'
+echo "==> configuring and starting"
+"${SSH[@]}" bash -s <<'REMOTE'
 set -euo pipefail
 cd /opt/samparkai/deploy/samparkai
-
-# The public address, for the bootstrap certificate Caddy serves on the bare
-# IP until DNS points the domain here. IMDSv2 first; fall back to the address
-# this deploy was aimed at.
-IMDS_TOKEN=$(curl -sS -m 2 -X PUT http://169.254.169.254/latest/api/token \
-             -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' 2>/dev/null || true)
-PUBLIC_IP=$(curl -sS -m 2 -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
-            http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || true)
-PUBLIC_IP=${PUBLIC_IP:-$TARGET_HOST}
 
 if [ ! -f .env ]; then
   TOKEN=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))' 2>/dev/null \
@@ -44,7 +36,6 @@ if [ ! -f .env ]; then
 VAANI_ENV=prod
 VAANI_API_TOKEN=$TOKEN
 VAANI_LOG_LEVEL=INFO
-PUBLIC_IP=$PUBLIC_IP
 # Hosted providers (Sarvam speech, the LLM) are set on the admin page at
 # /settings once logged in with the token; they persist in the data volume.
 # They can equally be set here and take effect on the next restart — see
@@ -52,21 +43,38 @@ PUBLIC_IP=$PUBLIC_IP
 ENV
   chmod 600 .env
   echo "generated .env with a fresh API token"
-else
-  # Keep the token; refresh the address in case the instance moved.
-  grep -q '^PUBLIC_IP=' .env && sed -i "s/^PUBLIC_IP=.*/PUBLIC_IP=$PUBLIC_IP/" .env \
-    || echo "PUBLIC_IP=$PUBLIC_IP" >> .env
 fi
 
-if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi
-if ! docker info >/dev/null 2>&1; then DC="sudo $DC"; fi
+# The site block goes into the host Caddy through an import, so the other
+# site's own blocks are never edited. Validate before reloading: a bad file
+# on disk is harmless until Caddy reads it, and the reload is graceful.
+sudo install -d -m 755 /etc/caddy/sites
+sudo install -m 644 caddy-site.conf /etc/caddy/sites/samparkai.caddy
+if ! sudo grep -qF 'import /etc/caddy/sites/*.caddy' /etc/caddy/Caddyfile; then
+  printf '\n# Additional sites, one file each.\nimport /etc/caddy/sites/*.caddy\n' \
+    | sudo tee -a /etc/caddy/Caddyfile >/dev/null
+fi
+sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
+sudo systemctl reload caddy
+echo "host Caddy reloaded with the samparkai site"
 
-$DC up -d --build
-$DC ps
+docker compose up -d --build
+# The root disk here is small and shared; the build cache would otherwise
+# grow by about a gigabyte per deploy. Rebuilds are a few minutes slower.
+docker builder prune -f >/dev/null
+docker compose ps
+
+echo
+for _ in $(seq 1 30); do
+  if curl -fsS -o /dev/null http://127.0.0.1:8091/api/health; then
+    echo "app healthy on 127.0.0.1:8091"; break
+  fi
+  sleep 2
+done
 echo
 echo "API token (also in /opt/samparkai/deploy/samparkai/.env):"
 grep '^VAANI_API_TOKEN=' .env | cut -d= -f2-
 echo
-echo "Console: https://$PUBLIC_IP/  (accept the one-time certificate warning)"
-echo "         https://samparkai.demosites.co.in/  once DNS points here"
+echo "Console: https://samparkai.demosites.co.in/  once DNS points at this box;"
+echo "         Caddy fetches the certificate by itself when it does."
 REMOTE
