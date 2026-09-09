@@ -237,6 +237,10 @@ class CallSession:
             max_utterance_s=self._settings.max_turn_audio_s,
         )
         self._barge_in = BargeInDetector(trigger_ms=self._settings.barge_in_ms)
+        # Whether the playback currently running was cut off. The session state
+        # cannot answer that after the fact: a reply that finished and a reply
+        # that was cancelled both leave the call in LISTENING.
+        self._interrupted = False
 
         # Frames arrive from the transport faster than they are consumed during
         # a THINKING pause; the queue absorbs that without blocking the reader.
@@ -367,6 +371,7 @@ class CallSession:
         if self.state == CallState.SPEAKING:
             if self._barge_in.push(frame):
                 log.info("barge-in")
+                self._interrupted = True
                 await self._cancel_playback()
                 await self._transport.send_event({"type": "barge_in"})
                 self._set_state(CallState.LISTENING)
@@ -484,8 +489,10 @@ class CallSession:
         # 3. Speak
         if turn.text:
             metrics.tts_first_chunk_ms = await self._speak(turn.text, kind="reply")
+            # Only the playback that just ran can have been cut off; a turn with
+            # nothing to say cannot be interrupted.
+            metrics.barged_in = self._interrupted
         metrics.total_ms = int((time.monotonic() - turn_started) * 1000)
-        metrics.barged_in = self.state == CallState.LISTENING and turn.text != ""
 
         self._record_turn(
             transcript.text,
@@ -745,6 +752,7 @@ class CallSession:
         await self._stop_hold()
         self._set_state(CallState.SPEAKING)
         self._barge_in.reset()
+        self._interrupted = False
         first_chunk_ms = 0
         started = time.monotonic()
         finished = asyncio.Event()

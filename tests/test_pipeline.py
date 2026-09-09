@@ -24,6 +24,7 @@ from vaani.audio.vad import BargeInDetector, EnergyVAD, TurnDetector
 from vaani.config import FRAME_BYTES, SAMPLE_RATE, Settings
 from vaani.core.registry import build_services
 from vaani.pipeline.session import CallSession, CallState
+from vaani.providers.stt.mock import MockSTT
 from vaani.rag.chunking import chunk_text
 
 # ---------------------------------------------------------------------------
@@ -44,6 +45,19 @@ def tone(ms: int, freq: float = 220.0, amplitude: float = 0.5) -> bytes:
 
 def silence(ms: int) -> bytes:
     return b"\x00\x00" * int(SAMPLE_RATE * ms / 1000)
+
+
+async def _settle(predicate, timeout: float = 5.0) -> bool:
+    """Poll until `predicate` holds. The pipeline paces playback against the
+    wall clock, so how long a step takes varies with the machine; a fixed sleep
+    either flakes or pads the suite."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        if predicate():
+            return True
+        await asyncio.sleep(0.01)
+    return False
 
 
 class FakeTransport:
@@ -380,6 +394,68 @@ async def test_caller_can_interrupt_the_agent(services):
     await asyncio.sleep(0.2)
     assert len(transport.audio) == stopped_at, "audio kept flowing after barge-in"
     assert stopped_at < audio_before + 16000 * 2 * 5, "the full greeting was still sent"
+
+    await session.hangup()
+    await asyncio.wait_for(task, timeout=5)
+
+
+def _brisk_call(services, transport) -> CallSession:
+    """A call whose greeting is a third of a second and whose reply is the
+    shortest the mock LLM has. Playback is paced at real time on purpose, so the
+    default scripted sentences would spend eight seconds of the suite sleeping.
+    """
+    services.profiles["default"] = replace(
+        services.profiles["default"], greeting="Ready.", ask_language=False
+    )
+    services.stt = MockSTT(script=["Thank you, that is all."])
+    return CallSession(transport, services, agent_key="default")
+
+
+async def test_an_uninterrupted_reply_is_not_recorded_as_barge_in(services):
+    """`barged_in` must mean the caller cut the agent off, not that a turn happened.
+
+    Regression: the flag was read off the session state once playback returned,
+    and a reply that finished and a reply that was cancelled both leave the
+    session in LISTENING. So every turn of every live call was stored as an
+    interruption, and the metric could never point at a real one.
+    """
+    transport = FakeTransport()
+    session = _brisk_call(services, transport)
+    task = asyncio.create_task(session.run())
+
+    assert await _settle(lambda: session.state == CallState.LISTENING), "greeting never finished"
+
+    await session.push_audio(tone(700))
+    await session.push_audio(silence(500))
+    assert await _settle(lambda: bool(session.record.turns)), "the utterance produced no turn"
+
+    assert not transport.of_type("barge_in"), "nothing was spoken over the agent"
+    assert session.record.turns[0]["metrics"]["barged_in"] is False
+
+    await session.hangup()
+    await asyncio.wait_for(task, timeout=5)
+
+
+async def test_an_interrupted_reply_is_recorded_as_barge_in(services):
+    """The other half of the same metric: a reply the caller cut off must be
+    marked, or a flag that is never true is as useless as one that always is."""
+    transport = FakeTransport()
+    session = _brisk_call(services, transport)
+    task = asyncio.create_task(session.run())
+
+    assert await _settle(lambda: session.state == CallState.LISTENING), "greeting never finished"
+
+    await session.push_audio(tone(700))
+    await session.push_audio(silence(500))
+    assert await _settle(lambda: session.state == CallState.SPEAKING), "the agent never replied"
+
+    for _ in range(30):  # 600 ms over the top of the reply
+        await session.push_audio(tone(20))
+        await asyncio.sleep(0.005)
+
+    assert await _settle(lambda: bool(session.record.turns)), "the turn was never recorded"
+    assert transport.of_type("barge_in"), "interrupting the reply must fire barge-in"
+    assert session.record.turns[0]["metrics"]["barged_in"] is True
 
     await session.hangup()
     await asyncio.wait_for(task, timeout=5)
