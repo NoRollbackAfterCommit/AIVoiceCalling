@@ -168,6 +168,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(smartflo_api.router, prefix="/api")
     app.include_router(ws_voice.router)
     app.include_router(ws_monitor.router)
+    # No prefix: the per-call socket lives at /ws, beside /ws/call.
+    app.include_router(smartflo_api.ws_router)
 
     static_dir = Path(__file__).parent / "web" / "static"
     if static_dir.is_dir():

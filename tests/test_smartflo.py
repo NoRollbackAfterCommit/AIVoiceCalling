@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import io
 import json
 import logging
@@ -15,6 +16,8 @@ import time
 
 import httpx
 import pytest
+from starlette.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from vaani.api.smartflo import CALL_TOKEN_TTL_S, mint_call_token, verify_call_token
 from vaani.config import Settings
@@ -471,3 +474,228 @@ def test_the_access_log_redacts_the_handshake_secret():
     out = stream.getvalue()
     assert secret not in out
     assert "callId=CA9" in out, "the rest of the line survives"
+
+
+def test_a_broken_configured_secret_never_verifies():
+    """`_sign` encodes the secret. A lone surrogate saved as the secret used to
+    raise there, on the socket path, where nothing had guarded it."""
+    assert verify_call_token("\ud800", "AAA.100.abc") is None
+
+
+# -- The call itself, over the WebSocket ----------------------------------------
+
+
+class _PinnedStore:
+    """Stands in for the SettingsStore that lifespan builds.
+
+    `create_app(settings)` alone stops being hermetic once lifespan runs: it
+    constructs a SettingsStore, which layers the developer's untracked
+    data/settings.json over the environment and *replaces* the settings passed
+    in. That file exists on some machines and not on a clean checkout. Pinning
+    the store to the object under test is what makes these tests see the same
+    settings on both.
+    """
+
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+
+
+@contextlib.contextmanager
+def _live_app(settings, monkeypatch, tmp_path, **overrides):
+    """The real app with lifespan running, so the services and the call manager
+    the socket needs exist. httpx's ASGITransport speaks no WebSocket and never
+    runs lifespan, hence Starlette's TestClient here and not the fixture above."""
+    pinned = settings.model_copy(
+        update={
+            "env": "dev",
+            "api_token": "admin-token",
+            "smartflo_enabled": True,
+            "smartflo_webhook_secret": "hook-secret",
+            "smartflo_public_host": "voice.example.in",
+            "database_url": f"sqlite+aiosqlite:///{tmp_path / 'calls.db'}",
+            **overrides,
+        }
+    )
+    monkeypatch.setattr("vaani.main.SettingsStore", lambda: _PinnedStore(pinned))
+    # Boot also indexes ./knowledge, and the checkout has one. Nothing in these
+    # tests should depend on what a developer keeps there.
+    monkeypatch.chdir(tmp_path)
+    with TestClient(create_app(pinned)) as client:
+        yield client
+
+
+@pytest.fixture
+def smartflo_live(settings, monkeypatch, tmp_path):
+    with _live_app(settings, monkeypatch, tmp_path) as client:
+        yield client
+
+
+def _call_token(client: TestClient, call_id: str = "CA9") -> str:
+    body = client.post(HANDSHAKE, params={"key": "hook-secret"}, json={"callId": call_id}).json()
+    return body["wss_url"].split("token=", 1)[1]
+
+
+def _start_frame(stream_sid: str = "MZ1", caller: str = "+919876543210") -> str:
+    return json.dumps(
+        {
+            "event": "start",
+            "streamSid": stream_sid,
+            "start": {
+                "streamSid": stream_sid,
+                "callSid": "CA9",
+                "from": caller,
+                "to": "+911140000000",
+                "direction": "inbound",
+                "mediaFormat": {"encoding": "audio/x-mulaw", "sampleRate": 8000},
+            },
+        }
+    )
+
+
+def _media_frame_in(ms: int = 100) -> str:
+    return json.dumps(
+        {
+            "event": "media",
+            "streamSid": "MZ1",
+            "media": {"payload": base64.b64encode(_ulaw_silence(ms)).decode()},
+        }
+    )
+
+
+def _stop_frame(stream_sid: str = "MZ1") -> str:
+    return json.dumps({"event": "stop", "streamSid": stream_sid})
+
+
+def _first_media(ws) -> dict:
+    """The transport puts only media, mark and clear on the wire, so the
+    greeting's first media frame is the first thing to arrive."""
+    for _ in range(40):
+        frame = json.loads(ws.receive_text())
+        if frame.get("event") == "media":
+            return frame
+    pytest.fail("the agent never sent audio back")
+
+
+def _until_closed(ws) -> None:
+    """Drain until the server closes the socket, and fail if it never does.
+    The transport leaves the socket open on purpose; closing it is the
+    endpoint's job, and Smartflo keeps the line up until it happens.
+
+    The cap only has to sit above one whole greeting: a starved loop catches up
+    on pacing by bursting the rest of the utterance ahead of the close."""
+    for _ in range(2000):
+        try:
+            ws.receive_text()
+        except WebSocketDisconnect:
+            return
+    pytest.fail("the endpoint never closed the socket")
+
+
+def test_websocket_refuses_a_bad_token(smartflo_live):
+    with pytest.raises(WebSocketDisconnect) as refused:
+        with smartflo_live.websocket_connect("/ws/smartflo?token=forged"):
+            pass
+    # 1008 is the route's own refusal; an unrouted path closes with 1000.
+    assert refused.value.code == 1008
+
+
+def test_websocket_refuses_no_token(smartflo_live):
+    with pytest.raises(WebSocketDisconnect) as refused:
+        with smartflo_live.websocket_connect("/ws/smartflo"):
+            pass
+    assert refused.value.code == 1008
+
+
+def test_websocket_refuses_a_genuine_token_while_smartflo_is_off(settings, monkeypatch, tmp_path):
+    with _live_app(settings, monkeypatch, tmp_path, smartflo_enabled=False) as client:
+        token = mint_call_token("hook-secret", "CA9")
+        with pytest.raises(WebSocketDisconnect) as refused:
+            with client.websocket_connect(f"/ws/smartflo?token={token}"):
+                pass
+        assert refused.value.code == 1008
+
+
+def test_websocket_refuses_when_the_configured_secret_is_broken(settings, monkeypatch, tmp_path):
+    """The handshake already guards a secret that cannot be encoded. The socket
+    must refuse the same way, not raise inside the handler."""
+    with _live_app(settings, monkeypatch, tmp_path, smartflo_webhook_secret="\ud800") as client:
+        with pytest.raises(WebSocketDisconnect) as refused:
+            with client.websocket_connect("/ws/smartflo?token=AAA.100.abc"):
+                pass
+        assert refused.value.code == 1008
+
+
+def test_a_smartflo_call_greets_the_caller(smartflo_live):
+    """The whole path: handshake, connect, start, audio back, stop — and then
+    the server closes the socket, which the transport cannot do for it."""
+    token = _call_token(smartflo_live)
+    with smartflo_live.websocket_connect(f"/ws/smartflo?token={token}") as ws:
+        ws.send_text(json.dumps({"event": "connected", "protocol": "Call", "version": "1.0.0"}))
+        ws.send_text(_start_frame())
+        ws.send_text(_media_frame_in())
+
+        media = _first_media(ws)
+        payload = base64.b64decode(media["media"]["payload"])
+        assert len(payload) % ULAW_FRAME_BYTES == 0
+        assert media["streamSid"] == "MZ1"
+
+        ws.send_text(_stop_frame())
+        _until_closed(ws)
+    assert smartflo_live.app.state.calls.live_count == 0
+
+
+def test_an_operator_hangup_closes_the_socket(smartflo_live):
+    """When the session ends first — the supervisor's hang-up button, or the
+    agent saying goodbye — Smartflo has to see the socket close, or the line
+    stays up with dead air until the caller gives up."""
+    manager = smartflo_live.app.state.calls
+    token = _call_token(smartflo_live)
+    with smartflo_live.websocket_connect(f"/ws/smartflo?token={token}") as ws:
+        ws.send_text(_start_frame())
+        _first_media(ws)  # registered and running
+
+        [live] = smartflo_live.portal.call(manager.live)
+        assert live["caller_number"] == "+919876543210"
+        smartflo_live.portal.call(manager.hangup, live["call_id"])
+        _until_closed(ws)
+    assert manager.live_count == 0
+
+
+def test_a_call_past_capacity_is_refused_at_start(settings, monkeypatch, tmp_path):
+    """Smartflo's protocol has no 'rejected' frame; closing the socket is the
+    only refusal it understands."""
+    with _live_app(settings, monkeypatch, tmp_path, max_concurrent_calls=1) as client:
+        busy_token = _call_token(client, "CA1")
+        with client.websocket_connect(f"/ws/smartflo?token={busy_token}") as busy:
+            busy.send_text(_start_frame(stream_sid="MZ1"))
+            _first_media(busy)  # the one line is now taken
+
+            spare_token = _call_token(client, "CA2")
+            with client.websocket_connect(f"/ws/smartflo?token={spare_token}") as ws:
+                ws.send_text(_start_frame(stream_sid="MZ2"))
+                with pytest.raises(WebSocketDisconnect):
+                    ws.receive_text()
+
+            busy.send_text(_stop_frame("MZ1"))
+            _until_closed(busy)
+
+
+def test_the_live_fixture_ignores_a_settings_file_on_disk(settings, monkeypatch, tmp_path):
+    """Lifespan builds a SettingsStore from ./data/settings.json. A developer's
+    untracked copy that switches Smartflo off, and a clean checkout with none,
+    must both leave these tests seeing the fixture's values. This plants the
+    hostile version where the store would look and checks the call still opens."""
+    hostile = tmp_path / "data" / "settings.json"
+    hostile.parent.mkdir()
+    hostile.write_text(
+        json.dumps(
+            {"smartflo_enabled": False, "smartflo_webhook_secret": "other", "api_token": "x"}
+        )
+    )
+    with _live_app(settings, monkeypatch, tmp_path) as client:
+        assert client.app.state.settings.smartflo_webhook_secret == "hook-secret"
+        with client.websocket_connect(f"/ws/smartflo?token={_call_token(client)}") as ws:
+            ws.send_text(_start_frame())
+            _first_media(ws)
+            ws.send_text(_stop_frame())
+            _until_closed(ws)
