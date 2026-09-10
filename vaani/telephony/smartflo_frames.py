@@ -100,3 +100,35 @@ def parse_frame(raw: str | bytes) -> SmartfloEvent:
         return SmartfloEvent(kind=kind, stream_sid=stream_sid)
 
     return SmartfloEvent(kind="invalid")
+
+
+# 160 bytes of mu-law at 8 kHz is exactly 20 ms. Smartflo refuses bot media that
+# is under 160 bytes or not a multiple of it.
+ULAW_FRAME_BYTES = 160
+
+
+def media_frame(stream_sid: str, ulaw: bytes, seq: int) -> str:
+    return json.dumps(
+        {
+            "event": "media",
+            "streamSid": stream_sid,
+            "sequenceNumber": str(seq),
+            "media": {"payload": base64.b64encode(ulaw).decode("ascii")},
+        }
+    )
+
+
+def mark_frame(stream_sid: str, name: str, seq: int) -> str:
+    return json.dumps(
+        {
+            "event": "mark",
+            "streamSid": stream_sid,
+            "sequenceNumber": str(seq),
+            "mark": {"name": name},
+        }
+    )
+
+
+def clear_frame(stream_sid: str, seq: int) -> str:
+    """Barge-in. Empties whatever the carrier still has buffered for the caller."""
+    return json.dumps({"event": "clear", "streamSid": stream_sid, "sequenceNumber": str(seq)})

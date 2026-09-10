@@ -10,7 +10,14 @@ import base64
 import json
 
 from vaani.config import Settings
-from vaani.telephony.smartflo_frames import SmartfloEvent, parse_frame
+from vaani.telephony.smartflo_frames import (
+    ULAW_FRAME_BYTES,
+    SmartfloEvent,
+    clear_frame,
+    mark_frame,
+    media_frame,
+    parse_frame,
+)
 
 
 def test_smartflo_settings_carry_ui_metadata_and_hide_the_secret():
@@ -102,3 +109,32 @@ def test_a_bad_frame_is_invalid_rather_than_fatal():
     assert parse_frame(json.dumps({"event": "unheard_of"})).kind == "invalid"
     assert parse_frame(b"\xff\xfe binary junk").kind == "invalid"
     assert isinstance(parse_frame("not json"), SmartfloEvent)
+
+
+def test_media_frame_envelopes_mulaw_unchanged():
+    ulaw = bytes(range(160))
+    frame = json.loads(media_frame("MZ1", ulaw, 7))
+    assert frame["event"] == "media"
+    assert frame["streamSid"] == "MZ1"
+    # Twilio-shaped, and Smartflo copies it: the sequence number is a string.
+    assert frame["sequenceNumber"] == "7"
+    assert base64.b64decode(frame["media"]["payload"]) == ulaw
+
+
+def test_mark_and_clear_frames_carry_stream_and_sequence():
+    mark = json.loads(mark_frame("MZ1", "utt-2", 11))
+    assert mark == {
+        "event": "mark",
+        "streamSid": "MZ1",
+        "sequenceNumber": "11",
+        "mark": {"name": "utt-2"},
+    }
+
+    clear = json.loads(clear_frame("MZ1", 12))
+    assert clear == {"event": "clear", "streamSid": "MZ1", "sequenceNumber": "12"}
+
+
+def test_one_mulaw_frame_is_twenty_milliseconds():
+    """160 bytes of mu-law at 8 kHz is exactly 20 ms, which is why Smartflo's
+    multiple-of-160 rule lines up with the pipeline's frame cadence."""
+    assert ULAW_FRAME_BYTES == 160
