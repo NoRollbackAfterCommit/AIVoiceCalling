@@ -49,16 +49,17 @@ Pure functions and one dataclass, so the wire format can be tested without a soc
 ```python
 @dataclass(slots=True)
 class SmartfloEvent:
-    kind: str                      # connected | start | media | dtmf | stop | mark | invalid
+    kind: str  # connected | start | media | dtmf | stop | mark | invalid
     stream_sid: str | None = None
     call_sid: str | None = None
-    pcm: bytes | None = None       # decoded to PCM16 mono 16 kHz
-    caller: str | None = None      # `from`
-    called: str | None = None      # `to`
+    pcm: bytes | None = None  # decoded to PCM16 mono 16 kHz
+    caller: str | None = None  # `from`
+    called: str | None = None  # `to`
     direction: str | None = None
     custom: dict[str, str] = field(default_factory=dict)
     digit: str | None = None
     mark_name: str | None = None
+
 
 def parse_frame(raw: str | bytes) -> SmartfloEvent: ...
 def media_frame(stream_sid: str, ulaw: bytes, seq: int) -> str: ...
