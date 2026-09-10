@@ -6,6 +6,7 @@ wire format is exercised without a Tata account, a phone line or a network.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 
@@ -238,3 +239,41 @@ async def test_sends_are_dropped_once_closed_rather_than_raising():
     await transport.send_audio(_pcm_silence_16k(200))
     await transport.send_event({"type": "barge_in"})
     assert sink.frames == []
+
+
+class _StallingSink(_Sink):
+    """A sender whose first frame stalls, as a socket under backpressure does.
+
+    Counts overlapping sends: a transport that hands frame N+1 to the sender while
+    N is still in flight has already lost sequence order, whatever the sender then
+    does with them.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.in_flight = 0
+        self.max_in_flight = 0
+        self._stalled = False
+
+    async def __call__(self, raw: str) -> None:
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        if not self._stalled:
+            self._stalled = True
+            await asyncio.sleep(0.02)
+        self.in_flight -= 1
+        await super().__call__(raw)
+
+
+async def test_a_barge_in_cannot_overtake_a_media_frame_still_in_flight():
+    sink = _StallingSink()
+    transport = SmartfloTransport(sink, stream_sid="MZ1")
+
+    audio = asyncio.create_task(transport.send_audio(_pcm_silence_16k(20)))
+    await asyncio.sleep(0)  # far enough for the media frame to be stalled inside the sender
+    await transport.send_event({"type": "barge_in"})
+    await audio
+
+    assert sink.max_in_flight == 1, "a second frame was handed over while the first was in flight"
+    seqs = [int(f["sequenceNumber"]) for f in sink.frames]
+    assert seqs == [1, 2], f"frames reached the sender out of sequence order: {seqs}"

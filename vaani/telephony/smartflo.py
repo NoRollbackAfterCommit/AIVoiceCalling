@@ -39,7 +39,12 @@ class SmartfloTransport:
         self._send_raw = sender
         self.stream_sid = stream_sid
         self._open = True
-        # One writer at a time: audio streaming races event emission constantly.
+        # One writer at a time, held across the socket await: taking a sequence
+        # number and putting that frame on the wire is one step. Release between
+        # them and a `clear` can reach the wire ahead of the media it was meant to
+        # flush whenever the socket stalls on a frame; the carrier then sees
+        # sequence numbers out of order, and what it does with the stale audio is
+        # its call, not ours. Per transport, so one call never waits on another.
         self._lock = asyncio.Lock()
         # Agent audio arrives in lumps that do not divide by 160. Smartflo refuses
         # a short frame, so the remainder waits here for the next one.
@@ -70,7 +75,7 @@ class SmartfloTransport:
                 return
             chunk = bytes(self._pending[:usable])
             del self._pending[:usable]
-        await self._send(media_frame(self.stream_sid, chunk, self._next_seq()))
+            await self._send(media_frame(self.stream_sid, chunk, self._next_seq()))
 
     async def send_event(self, event: dict[str, Any]) -> None:
         kind = event.get("type")
@@ -80,12 +85,15 @@ class SmartfloTransport:
                 # Ours as well as theirs: a flush followed by our own stale
                 # remainder would put the interrupted sentence back on the line.
                 self._pending.clear()
-            await self._send(clear_frame(self.stream_sid, self._next_seq()))
+                await self._send(clear_frame(self.stream_sid, self._next_seq()))
         elif kind == "speech_end" and self.stream_sid:
-            self._marks += 1
-            name = f"utt-{self._marks}"
-            self._mark_sent_at[name] = time.monotonic()
-            await self._send(mark_frame(self.stream_sid, name, self._next_seq()))
+            async with self._lock:
+                self._marks += 1
+                name = f"utt-{self._marks}"
+                # Stamped just before the send, not before the wait for the lock,
+                # so a queued media frame does not inflate the measured round trip.
+                self._mark_sent_at[name] = time.monotonic()
+                await self._send(mark_frame(self.stream_sid, name, self._next_seq()))
 
         if kind in ("transcript", "transfer", "call_end", "barge_in"):
             log.info(
