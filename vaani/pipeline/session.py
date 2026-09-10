@@ -241,6 +241,11 @@ class CallSession:
         # cannot answer that after the fact: a reply that finished and a reply
         # that was cancelled both leave the call in LISTENING.
         self._interrupted = False
+        # Whether any of the current reply has actually left for the caller.
+        # SPEAKING starts when the reply is ready, but a hosted TTS takes a few
+        # hundred milliseconds to return its first chunk, and the caller hears
+        # nothing until it does.
+        self._audible = False
 
         # Frames arrive from the transport faster than they are consumed during
         # a THINKING pause; the queue absorbs that without blocking the reader.
@@ -369,7 +374,10 @@ class CallSession:
 
     async def _handle_frame(self, frame: bytes) -> None:
         if self.state == CallState.SPEAKING:
-            if self._barge_in.push(frame):
+            # Nothing has reached the caller yet, so there is nothing to talk
+            # over. Firing here discards a reply they never heard and leaves the
+            # line silent, which reads as the agent ignoring them.
+            if self._audible and self._barge_in.push(frame):
                 log.info("barge-in")
                 self._interrupted = True
                 await self._cancel_playback()
@@ -753,6 +761,7 @@ class CallSession:
         self._set_state(CallState.SPEAKING)
         self._barge_in.reset()
         self._interrupted = False
+        self._audible = False
         first_chunk_ms = 0
         started = time.monotonic()
         finished = asyncio.Event()
@@ -770,6 +779,7 @@ class CallSession:
                         first_chunk_ms = int((time.monotonic() - started) * 1000)
                         first = False
                     await self._transport.send_audio(chunk)
+                    self._audible = True
                     sent_s += len(chunk) / (SAMPLE_RATE * 2)
 
                     ahead = sent_s - (time.monotonic() - started)

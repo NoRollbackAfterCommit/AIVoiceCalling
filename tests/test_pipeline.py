@@ -449,6 +449,12 @@ async def test_an_interrupted_reply_is_recorded_as_barge_in(services):
     await session.push_audio(silence(500))
     assert await _settle(lambda: session.state == CallState.SPEAKING), "the agent never replied"
 
+    # Wait for audio to actually reach the caller before talking over it. SPEAKING
+    # begins when the reply is ready, not when it is audible, and barge-in
+    # deliberately ignores anything sent in that gap.
+    silent_at = len(transport.audio)
+    assert await _settle(lambda: len(transport.audio) > silent_at), "the reply never started"
+
     for _ in range(30):  # 600 ms over the top of the reply
         await session.push_audio(tone(20))
         await asyncio.sleep(0.005)
@@ -456,6 +462,58 @@ async def test_an_interrupted_reply_is_recorded_as_barge_in(services):
     assert await _settle(lambda: bool(session.record.turns)), "the turn was never recorded"
     assert transport.of_type("barge_in"), "interrupting the reply must fire barge-in"
     assert session.record.turns[0]["metrics"]["barged_in"] is True
+
+    await session.hangup()
+    await asyncio.wait_for(task, timeout=5)
+
+
+class _LateFirstChunkTTS:
+    """Wraps a TTS so its first chunk arrives late, as a hosted one's does.
+
+    Sarvam takes 330-600 ms to return the first chunk of an utterance. The mock
+    answers instantly, which is why no test could see what happens in that gap.
+    """
+
+    def __init__(self, inner: Any, delay_s: float) -> None:
+        self._inner = inner
+        self._delay = delay_s
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    async def stream(self, text: str, *, voice: str | None = None):
+        await asyncio.sleep(self._delay)
+        async for chunk in self._inner.stream(text, voice=voice):
+            yield chunk
+
+
+async def test_noise_before_a_reply_is_audible_does_not_cancel_it(services):
+    """Barge-in means the caller talked over audio they could actually hear.
+
+    Between `_speak` entering SPEAKING and TTS returning its first chunk the
+    caller is hearing nothing, so there is nothing to interrupt. Cancelling in
+    that window loses the reply outright — the caller gets silence and the log
+    gets "no audio produced for a reply". Two consecutive replies were lost that
+    way on the first hosted call.
+    """
+    transport = FakeTransport()
+    session = _brisk_call(services, transport)
+    services.tts = _LateFirstChunkTTS(services.tts, 0.4)
+    task = asyncio.create_task(session.run())
+
+    assert await _settle(lambda: session.state == CallState.LISTENING), "greeting never finished"
+
+    await session.push_audio(tone(700))
+    await session.push_audio(silence(500))
+    assert await _settle(lambda: session.state == CallState.SPEAKING), "the agent never replied"
+
+    audio_before = len(transport.audio)
+    for _ in range(15):  # 300 ms of noise while the line is still silent
+        await session.push_audio(tone(20))
+        await asyncio.sleep(0.005)
+
+    assert not transport.of_type("barge_in"), "cancelled a reply the caller could not yet hear"
+    assert await _settle(lambda: len(transport.audio) > audio_before), "the reply was never spoken"
 
     await session.hangup()
     await asyncio.wait_for(task, timeout=5)
