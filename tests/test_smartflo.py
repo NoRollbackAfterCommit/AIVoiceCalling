@@ -10,6 +10,7 @@ import base64
 import json
 
 from vaani.config import Settings
+from vaani.telephony.smartflo import SmartfloTransport
 from vaani.telephony.smartflo_frames import (
     ULAW_FRAME_BYTES,
     SmartfloEvent,
@@ -141,3 +142,99 @@ def test_one_mulaw_frame_is_twenty_milliseconds():
     """160 bytes of mu-law at 8 kHz is exactly 20 ms, which is why Smartflo's
     multiple-of-160 rule lines up with the pipeline's frame cadence."""
     assert ULAW_FRAME_BYTES == 160
+
+
+class _Sink:
+    """Captures the JSON frames a transport would have put on the wire."""
+
+    def __init__(self) -> None:
+        self.frames: list[dict] = []
+
+    async def __call__(self, raw: str) -> None:
+        self.frames.append(json.loads(raw))
+
+    def of_event(self, kind: str) -> list[dict]:
+        return [f for f in self.frames if f.get("event") == kind]
+
+
+def _pcm_silence_16k(ms: int) -> bytes:
+    return b"\x00\x00" * (16 * ms)
+
+
+async def test_agent_audio_goes_out_as_multiples_of_160_mulaw_bytes():
+    sink = _Sink()
+    transport = SmartfloTransport(sink, stream_sid="MZ1")
+
+    # 200 ms at 16 kHz PCM16 is 200 ms of mu-law at 8 kHz: 1600 bytes, ten frames' worth.
+    await transport.send_audio(_pcm_silence_16k(200))
+
+    media = sink.of_event("media")
+    assert media, "no media frame was sent"
+    for frame in media:
+        payload = base64.b64decode(frame["media"]["payload"])
+        assert len(payload) >= ULAW_FRAME_BYTES, "Smartflo refuses media under 160 bytes"
+        assert len(payload) % ULAW_FRAME_BYTES == 0, "media must be a multiple of 160 bytes"
+    assert sum(len(base64.b64decode(f["media"]["payload"])) for f in media) == 1600
+
+
+async def test_a_remainder_is_held_back_rather_than_sent_short():
+    sink = _Sink()
+    transport = SmartfloTransport(sink, stream_sid="MZ1")
+
+    # 25 ms is 200 mu-law bytes: one whole frame plus 40 bytes that must wait.
+    await transport.send_audio(_pcm_silence_16k(25))
+    first = sum(len(base64.b64decode(f["media"]["payload"])) for f in sink.of_event("media"))
+    assert first == 160, "the 40-byte remainder must not go out short"
+
+    await transport.send_audio(_pcm_silence_16k(25))
+    total = sum(len(base64.b64decode(f["media"]["payload"])) for f in sink.of_event("media"))
+    assert total == 320, "the held-back remainder must go out with the next audio"
+
+
+async def test_sequence_numbers_increment_across_every_frame():
+    sink = _Sink()
+    transport = SmartfloTransport(sink, stream_sid="MZ1")
+    await transport.send_audio(_pcm_silence_16k(20))
+    await transport.send_event({"type": "speech_end"})
+    await transport.send_audio(_pcm_silence_16k(20))
+
+    seqs = [int(f["sequenceNumber"]) for f in sink.frames]
+    assert seqs == sorted(seqs) and len(set(seqs)) == len(seqs), f"not strictly increasing: {seqs}"
+
+
+async def test_barge_in_clears_the_carrier_buffer_and_our_own():
+    sink = _Sink()
+    transport = SmartfloTransport(sink, stream_sid="MZ1")
+
+    await transport.send_audio(_pcm_silence_16k(25))  # leaves a 40-byte remainder
+    await transport.send_event({"type": "barge_in"})
+    assert sink.of_event("clear"), "barge-in must flush what the carrier has buffered"
+
+    sent_before = len(sink.of_event("media"))
+    # 15 ms is 120 mu-law bytes. Had the stale 40-byte remainder survived, the two
+    # together would make 160 and go out immediately.
+    await transport.send_audio(_pcm_silence_16k(15))
+    assert len(sink.of_event("media")) == sent_before, "stale audio survived the clear"
+
+
+async def test_speech_end_sends_a_mark_and_the_echo_is_recorded(caplog):
+    sink = _Sink()
+    transport = SmartfloTransport(sink, stream_sid="MZ1")
+    await transport.send_event({"type": "speech_end"})
+
+    marks = sink.of_event("mark")
+    assert len(marks) == 1
+    name = marks[0]["mark"]["name"]
+
+    with caplog.at_level("INFO"):
+        transport.note_mark(name)
+    assert any("playback confirmed" in r.message for r in caplog.records)
+
+
+async def test_sends_are_dropped_once_closed_rather_than_raising():
+    sink = _Sink()
+    transport = SmartfloTransport(sink, stream_sid="MZ1")
+    await transport.close()
+    await transport.send_audio(_pcm_silence_16k(200))
+    await transport.send_event({"type": "barge_in"})
+    assert sink.frames == []
