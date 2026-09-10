@@ -20,6 +20,7 @@ import base64
 import binascii
 import hashlib
 import hmac
+import secrets
 import time
 from typing import Any
 
@@ -53,6 +54,16 @@ def _decode(encoded: str) -> str | None:
         return None
 
 
+def _utf8(text: str) -> bytes | None:
+    """`str.encode` raises on a lone surrogate, which a JSON body can carry as
+    "\\ud800". Every string on this path comes from a stranger, so that has to
+    be a refusal, never a traceback on a public endpoint."""
+    try:
+        return text.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
+
+
 def mint_call_token(secret: str, call_id: str, *, now: float | None = None) -> str:
     exp = int((time.time() if now is None else now) + CALL_TOKEN_TTL_S)
     encoded = _encode(call_id)
@@ -72,7 +83,12 @@ def verify_call_token(secret: str, token: str, *, now: float | None = None) -> s
         exp = int(raw_exp)
     except ValueError:
         return None
-    if not hmac.compare_digest(_sign(secret, f"{encoded}:{exp}"), presented):
+    presented_bytes = _utf8(presented)
+    if presented_bytes is None or _utf8(encoded) is None:
+        return None
+    # Bytes, not str: compare_digest raises on non-ASCII text instead of
+    # returning False, and either part may hold anything a stranger typed.
+    if not hmac.compare_digest(_sign(secret, f"{encoded}:{exp}").encode(), presented_bytes):
         return None
     if (time.time() if now is None else now) > exp:
         return None
@@ -108,8 +124,9 @@ async def smartflo_handshake(request: Request) -> JSONResponse:
 
     secret = getattr(settings, "smartflo_webhook_secret", "") or ""
     fields = await _fields(request)
-    presented = str(fields.get("key") or "")
-    if not secret or not hmac.compare_digest(presented.encode(), secret.encode()):
+    expected = _utf8(secret)
+    presented = _utf8(str(fields.get("key") or ""))
+    if not expected or presented is None or not hmac.compare_digest(presented, expected):
         log.warning("refused a Smartflo handshake with a bad secret")
         return JSONResponse({"detail": "invalid webhook secret"}, status_code=401)
 
@@ -118,7 +135,20 @@ async def smartflo_handshake(request: Request) -> JSONResponse:
         log.error("smartflo_public_host is unset; cannot build a wss_url")
         return JSONResponse({"detail": "smartflo_public_host is not configured"}, status_code=503)
 
-    call_id = str(fields.get("callId") or fields.get("callid") or "").strip() or "unknown"
+    call_id = str(fields.get("callId") or fields.get("callid") or "").strip()
+    if not call_id:
+        # Not a fixed placeholder: a token for "unknown" would be one credential
+        # shared by every callId-less caller for two minutes. Random, so each
+        # such handshake still opens exactly one call; a warning, because a real
+        # callback without a callId means the field is not named what we expect
+        # and an operator should hear about it. Never a refusal: no live
+        # Smartflo callback has been seen yet, and a real call must not be
+        # dropped over a guess about its shape.
+        call_id = f"unknown-{secrets.token_urlsafe(12)}"
+        log.warning("smartflo handshake carried no callId; minted a random call id")
+    if _utf8(call_id) is None:
+        log.warning("refused a Smartflo handshake whose callId is not valid text")
+        return JSONResponse({"detail": "callId is not valid text"}, status_code=400)
     log.info(
         "smartflo handshake",
         extra={"call_id": call_id, "to": str(fields.get("toNumber") or "")[:32]},

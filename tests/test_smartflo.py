@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import json
+import logging
 import time
 
 import httpx
@@ -16,6 +18,7 @@ import pytest
 
 from vaani.api.smartflo import CALL_TOKEN_TTL_S, mint_call_token, verify_call_token
 from vaani.config import Settings
+from vaani.core.logging import configure_logging
 from vaani.main import create_app
 from vaani.telephony.smartflo import SmartfloTransport
 from vaani.telephony.smartflo_frames import (
@@ -319,6 +322,15 @@ def test_an_empty_secret_never_validates():
     assert verify_call_token("", mint_call_token("", "CA9")) is None
 
 
+def test_a_token_with_non_ascii_or_unencodable_parts_is_refused_not_raised():
+    """`hmac.compare_digest` raises on non-ASCII str and `str.encode` on a lone
+    surrogate. A stranger's token must land on None, never on a traceback."""
+    assert verify_call_token("s3cret", "AAA.100.é") is None
+    assert verify_call_token("s3cret", "AAA.100.\ud800") is None
+    assert verify_call_token("s3cret", "\ud800.100.abc") is None
+    assert verify_call_token("s3cret", "é.100.abc") is None
+
+
 # -- Handshake endpoint ---------------------------------------------------------
 
 
@@ -404,3 +416,58 @@ async def test_the_handshake_is_not_behind_the_admin_bearer_token(smartflo_app):
         HANDSHAKE, params={"key": "hook-secret"}, json={"callId": "CA9"}
     )
     assert response.status_code == 200, "the shared guard must not stand in front of this path"
+
+
+async def test_handshake_refuses_an_unencodable_secret_instead_of_crashing(smartflo_app):
+    """A JSON body can carry a lone surrogate as "\ud800". Before the fix
+    `presented.encode()` raised ahead of the comparison, turning a public
+    refusal into an unhandled 500."""
+    response = await smartflo_app.post(
+        HANDSHAKE,
+        content=b'{"key": "\ud800", "callId": "CA9"}',
+        headers={"content-type": "application/json"},
+    )
+    assert response.status_code == 401
+
+
+async def test_handshake_refuses_an_unencodable_call_id_instead_of_crashing(smartflo_app):
+    response = await smartflo_app.post(
+        HANDSHAKE,
+        params={"key": "hook-secret"},
+        content=b'{"callId": "\ud800"}',
+        headers={"content-type": "application/json"},
+    )
+    assert response.status_code == 400
+    assert "wss_url" not in response.text
+
+
+async def test_a_missing_call_id_gets_a_random_id_not_a_shared_one(smartflo_app):
+    """A fixed "unknown" would be one credential for every callId-less caller,
+    and a real Smartflo callback with no callId must still get a socket."""
+    ids = []
+    for _ in range(2):
+        body = (await smartflo_app.post(HANDSHAKE, params={"key": "hook-secret"}, json={})).json()
+        ids.append(verify_call_token("hook-secret", body["wss_url"].split("token=", 1)[1]))
+    assert all(ids), "each token must still verify"
+    assert "unknown" not in ids
+    assert ids[0] != ids[1], "two callId-less handshakes must not share a credential"
+
+
+def test_the_access_log_redacts_the_handshake_secret():
+    """uvicorn logs the query string of every HTTP request. The webhook secret
+    is also the HMAC key that mints per-call tokens, so writing it to disk on
+    every inbound call would let anyone with the log mint tokens at will."""
+    configure_logging("INFO")
+    stream = io.StringIO()
+    logging.getLogger().handlers[0].setStream(stream)
+
+    secret = "hs-9f3e-topsecret"
+    access = logging.getLogger("uvicorn.access")
+    for query in (f"key={secret}&callId=CA9", f"callId=CA9&key={secret}"):
+        access.info(
+            '%s - "%s %s HTTP/%s" %d', "10.0.0.1:1", "POST", f"{HANDSHAKE}?{query}", "1.1", 200
+        )
+
+    out = stream.getvalue()
+    assert secret not in out
+    assert "callId=CA9" in out, "the rest of the line survives"

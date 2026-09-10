@@ -79,13 +79,19 @@ def configure_logging(level: str = "INFO") -> None:
         lg.propagate = True
 
 
-_TOKEN_IN_QUERY = re.compile(r"((?:access_|api_)?token=)[^&\s\"']+")
+# `key=` as well as `token=`: Smartflo's handshake carries the webhook secret as
+# `?key=` on plain HTTP, by the carrier's convention, and that secret is also the
+# HMAC key that mints per-call tokens. Case-insensitive and matched anywhere in a
+# name (`apikey=`, `x-api-key=`): over-redacting a stray `key=` costs a log line
+# nothing; under-redacting a signing key hands out the ability to mint tokens.
+_TOKEN_IN_QUERY = re.compile(r"((?:access_|api_)?token=|key=)[^&\s\"']+", re.IGNORECASE)
 
 
 class _RedactQueryTokens(logging.Filter):
     """A WebSocket handshake carries the API token in its query string, which
     is the one place a browser can put it. The log line for that handshake
-    must not write it to disk on every call."""
+    must not write it to disk on every call. Smartflo's HTTP handshake does
+    the same with its webhook secret, by the carrier's convention, not ours."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         record.msg = _TOKEN_IN_QUERY.sub(r"\1***", str(record.msg))
