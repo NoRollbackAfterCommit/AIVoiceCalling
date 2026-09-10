@@ -48,7 +48,10 @@ def parse_frame(raw: str | bytes) -> SmartfloEvent:
             return SmartfloEvent(kind="invalid")
     try:
         message = json.loads(raw)
-    except (json.JSONDecodeError, TypeError, ValueError):
+    except (json.JSONDecodeError, TypeError, ValueError, RecursionError):
+        # A deeply nested payload (e.g. "[" * 100_000) blows the interpreter's call
+        # stack before the parser ever gets to raise JSONDecodeError. RecursionError
+        # is a RuntimeError, not a ValueError, so it needs its own name here.
         return SmartfloEvent(kind="invalid")
     if not isinstance(message, dict):
         return SmartfloEvent(kind="invalid")

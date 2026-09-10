@@ -109,6 +109,9 @@ def test_a_bad_frame_is_invalid_rather_than_fatal():
     assert parse_frame(json.dumps({"event": "unheard_of"})).kind == "invalid"
     assert parse_frame(b"\xff\xfe binary junk").kind == "invalid"
     assert isinstance(parse_frame("not json"), SmartfloEvent)
+    # A deeply nested payload overflows json.loads' call stack with RecursionError,
+    # not JSONDecodeError — a carrier flooding one bad frame must not kill the call.
+    assert parse_frame("[" * 100_000 + "]" * 100_000).kind == "invalid"
 
 
 def test_media_frame_envelopes_mulaw_unchanged():
