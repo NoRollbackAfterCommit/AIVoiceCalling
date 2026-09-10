@@ -6,7 +6,11 @@ wire format is exercised without a Tata account, a phone line or a network.
 
 from __future__ import annotations
 
+import base64
+import json
+
 from vaani.config import Settings
+from vaani.telephony.smartflo_frames import SmartfloEvent, parse_frame
 
 
 def test_smartflo_settings_carry_ui_metadata_and_hide_the_secret():
@@ -30,3 +34,71 @@ def test_smartflo_settings_carry_ui_metadata_and_hide_the_secret():
     secret = fields["smartflo_webhook_secret"].json_schema_extra
     assert secret["secret"] is True, "the webhook secret must never be echoed back"
     assert fields["smartflo_public_host"].json_schema_extra["secret"] is False
+
+
+def _ulaw_silence(ms: int) -> bytes:
+    # 0xFF is mu-law zero. 8 bytes per ms at 8 kHz.
+    return b"\xff" * (8 * ms)
+
+
+def test_parse_start_carries_the_caller_and_stream():
+    raw = json.dumps(
+        {
+            "event": "start",
+            "streamSid": "MZ123",
+            "start": {
+                "accountSid": "AC1",
+                "streamSid": "MZ123",
+                "callSid": "CA9",
+                "from": "+919876543210",
+                "to": "+911140000000",
+                "direction": "inbound",
+                "mediaFormat": {"encoding": "audio/x-mulaw", "sampleRate": 8000},
+                "customParameters": {"agent": "grievance"},
+            },
+        }
+    )
+    event = parse_frame(raw)
+    assert event.kind == "start"
+    assert event.stream_sid == "MZ123"
+    assert event.call_sid == "CA9"
+    assert event.caller == "+919876543210"
+    assert event.called == "+911140000000"
+    assert event.custom == {"agent": "grievance"}
+
+
+def test_parse_media_decodes_mulaw_to_pipeline_audio():
+    payload = base64.b64encode(_ulaw_silence(100)).decode()
+    event = parse_frame(
+        json.dumps({"event": "media", "streamSid": "MZ1", "media": {"payload": payload}})
+    )
+    assert event.kind == "media"
+    # 100 ms of 8 kHz mu-law becomes 100 ms of 16 kHz PCM16: 1600 samples, 3200 bytes.
+    assert event.pcm is not None and len(event.pcm) == 3200
+
+
+def test_parse_dtmf_and_mark():
+    dtmf = parse_frame(json.dumps({"event": "dtmf", "streamSid": "MZ1", "dtmf": {"digit": "7"}}))
+    assert (dtmf.kind, dtmf.digit) == ("dtmf", "7")
+
+    mark = parse_frame(json.dumps({"event": "mark", "streamSid": "MZ1", "mark": {"name": "utt-3"}}))
+    assert (mark.kind, mark.mark_name) == ("mark", "utt-3")
+
+
+def test_parse_connected_and_stop_are_recognised():
+    assert parse_frame(json.dumps({"event": "connected"})).kind == "connected"
+    assert parse_frame(json.dumps({"event": "stop", "streamSid": "MZ1"})).kind == "stop"
+
+
+def test_a_bad_frame_is_invalid_rather_than_fatal():
+    """One malformed frame from a carrier must not end a call."""
+    assert parse_frame("not json").kind == "invalid"
+    assert parse_frame(json.dumps(["not", "an", "object"])).kind == "invalid"
+    assert parse_frame(json.dumps({"no_event_key": 1})).kind == "invalid"
+    assert (
+        parse_frame(json.dumps({"event": "media", "media": {"payload": "!!!not base64!!!"}})).kind
+        == "invalid"
+    )
+    assert parse_frame(json.dumps({"event": "unheard_of"})).kind == "invalid"
+    assert parse_frame(b"\xff\xfe binary junk").kind == "invalid"
+    assert isinstance(parse_frame("not json"), SmartfloEvent)
