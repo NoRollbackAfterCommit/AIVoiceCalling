@@ -10,6 +10,7 @@ import asyncio
 import base64
 import json
 
+from vaani.api.smartflo import CALL_TOKEN_TTL_S, mint_call_token, verify_call_token
 from vaani.config import Settings
 from vaani.telephony.smartflo import SmartfloTransport
 from vaani.telephony.smartflo_frames import (
@@ -277,3 +278,37 @@ async def test_a_barge_in_cannot_overtake_a_media_frame_still_in_flight():
     assert sink.max_in_flight == 1, "a second frame was handed over while the first was in flight"
     seqs = [int(f["sequenceNumber"]) for f in sink.frames]
     assert seqs == [1, 2], f"frames reached the sender out of sequence order: {seqs}"
+
+
+# -- Per-call token -------------------------------------------------------------
+
+
+def test_a_fresh_token_round_trips_to_its_call_id():
+    token = mint_call_token("s3cret", "CA9")
+    assert verify_call_token("s3cret", token) == "CA9"
+
+
+def test_a_call_id_with_a_dot_survives_the_encoding():
+    token = mint_call_token("s3cret", "call.with.dots")
+    assert verify_call_token("s3cret", token) == "call.with.dots"
+
+
+def test_a_tampered_or_foreign_token_is_refused():
+    token = mint_call_token("s3cret", "CA9")
+    assert verify_call_token("different-secret", token) is None
+    assert verify_call_token("s3cret", token + "x") is None
+    assert verify_call_token("s3cret", "garbage") is None
+    assert verify_call_token("s3cret", "a.b.c") is None
+    assert verify_call_token("s3cret", "") is None
+
+
+def test_a_token_expires():
+    minted_at = 1_000_000.0
+    token = mint_call_token("s3cret", "CA9", now=minted_at)
+    assert verify_call_token("s3cret", token, now=minted_at + CALL_TOKEN_TTL_S - 1) == "CA9"
+    assert verify_call_token("s3cret", token, now=minted_at + CALL_TOKEN_TTL_S + 1) is None
+
+
+def test_an_empty_secret_never_validates():
+    """An unconfigured deployment must refuse, not accept everything."""
+    assert verify_call_token("", mint_call_token("", "CA9")) is None
