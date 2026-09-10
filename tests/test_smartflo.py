@@ -9,9 +9,14 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import time
+
+import httpx
+import pytest
 
 from vaani.api.smartflo import CALL_TOKEN_TTL_S, mint_call_token, verify_call_token
 from vaani.config import Settings
+from vaani.main import create_app
 from vaani.telephony.smartflo import SmartfloTransport
 from vaani.telephony.smartflo_frames import (
     ULAW_FRAME_BYTES,
@@ -312,3 +317,90 @@ def test_a_token_expires():
 def test_an_empty_secret_never_validates():
     """An unconfigured deployment must refuse, not accept everything."""
     assert verify_call_token("", mint_call_token("", "CA9")) is None
+
+
+# -- Handshake endpoint ---------------------------------------------------------
+
+
+@pytest.fixture
+async def smartflo_app(settings):
+    """The real app, with Smartflo switched on and a known secret.
+
+    The settings go in as an object, not through the environment: `create_app()`
+    without one reads the SettingsStore, which layers the developer's untracked
+    data/settings.json over the env and would make this fixture behave
+    differently on a clean checkout. ASGITransport never runs lifespan, which
+    would build that very store and replace the settings passed here. The
+    handshake must touch no provider, so none is built: a regression there
+    fails loudly on a missing attribute instead of passing against a mock.
+    """
+    app = create_app(
+        settings.model_copy(
+            update={
+                "env": "dev",
+                "api_token": "admin-token",
+                "smartflo_enabled": True,
+                "smartflo_webhook_secret": "hook-secret",
+                "smartflo_public_host": "voice.example.in",
+            }
+        )
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        yield client
+
+
+HANDSHAKE = "/api/telephony/smartflo/handshake"
+
+
+async def test_handshake_returns_exactly_the_two_keys_smartflo_accepts(smartflo_app):
+    """Smartflo refuses a body with any extra key, and drops the call."""
+    response = await smartflo_app.post(
+        HANDSHAKE,
+        params={"key": "hook-secret"},
+        json={"callId": "CA9", "fromNumber": "+919876543210", "toNumber": "+911140000000"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {"success", "wss_url"}
+    assert body["success"] is True
+    assert body["wss_url"].startswith("wss://voice.example.in/ws/smartflo?token=")
+
+
+async def test_handshake_accepts_a_get_with_query_parameters(smartflo_app):
+    response = await smartflo_app.get(
+        HANDSHAKE, params={"key": "hook-secret", "callId": "CA9", "fromNumber": "+911"}
+    )
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+
+
+async def test_handshake_mints_a_token_the_websocket_will_accept(smartflo_app):
+    body = (
+        await smartflo_app.post(HANDSHAKE, params={"key": "hook-secret"}, json={"callId": "CA9"})
+    ).json()
+    token = body["wss_url"].split("token=", 1)[1]
+    assert verify_call_token("hook-secret", token) == "CA9"
+
+
+async def test_handshake_refuses_a_wrong_or_missing_secret(smartflo_app):
+    assert (await smartflo_app.post(HANDSHAKE, json={"callId": "CA9"})).status_code == 401
+    assert (
+        await smartflo_app.post(HANDSHAKE, params={"key": "wrong"}, json={"callId": "CA9"})
+    ).status_code == 401
+
+
+async def test_handshake_answers_well_inside_the_two_second_budget(smartflo_app):
+    """Smartflo hangs up at 2000 ms. This path must do no I/O at all."""
+    started = time.monotonic()
+    await smartflo_app.post(HANDSHAKE, params={"key": "hook-secret"}, json={"callId": "CA9"})
+    assert (time.monotonic() - started) < 0.5
+
+
+async def test_the_handshake_is_not_behind_the_admin_bearer_token(smartflo_app):
+    """It is reached by Tata's servers, which send no Authorization header."""
+    response = await smartflo_app.post(
+        HANDSHAKE, params={"key": "hook-secret"}, json={"callId": "CA9"}
+    )
+    assert response.status_code == 200, "the shared guard must not stand in front of this path"

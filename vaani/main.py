@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from vaani.api import routes, ws_monitor, ws_voice
 from vaani.api import settings as settings_api
+from vaani.api import smartflo as smartflo_api
 from vaani.api import telephony as telephony_api
 from vaani.api.auth import TokenGuard, check_api_token
 from vaani.config import Settings, get_settings
@@ -164,6 +165,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(routes.router, prefix="/api")
     app.include_router(settings_api.router, prefix="/api")
     app.include_router(telephony_api.router, prefix="/api")
+    app.include_router(smartflo_api.router, prefix="/api")
     app.include_router(ws_voice.router)
     app.include_router(ws_monitor.router)
 
