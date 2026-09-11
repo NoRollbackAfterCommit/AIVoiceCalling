@@ -10,8 +10,12 @@ So both paths here are exempt from the shared bearer guard and authenticate
 themselves more strictly than it would. The handshake requires
 `smartflo_webhook_secret`, which is not the admin token and grants nothing but
 the ability to ask for a wss_url. The WebSocket requires a per-call token signed
-with that secret, valid for two minutes, which grants exactly one thing: opening
-one call.
+with that secret, which names one call and stops verifying two minutes after it
+is minted. Nothing marks a token as used, so a replay inside that window opens a
+second call — an accepted pilot risk (see docs/telephony.md), since the window
+only has to cover the hop between the handshake and Smartflo's connect, and
+neither credential can reach the settings API, the knowledge base, or a live
+call.
 """
 
 from __future__ import annotations
@@ -190,9 +194,10 @@ async def smartflo_handshake(request: Request) -> JSONResponse:
 
     call_id = str(fields.get("callId") or fields.get("callid") or "").strip()
     if not call_id:
-        # Not a fixed placeholder: a token for "unknown" would be one credential
-        # shared by every callId-less caller for two minutes. Random, so each
-        # such handshake still opens exactly one call; a warning, because a real
+        # Not a fixed placeholder: a token is not single-use, so one minted for
+        # "unknown" would be a credential every callId-less caller could replay
+        # against every other's call for two minutes. Random, so a replay stays
+        # confined to the handshake it came from; a warning, because a real
         # callback without a callId means the field is not named what we expect
         # and an operator should hear about it. Never a refusal: no live
         # Smartflo callback has been seen yet, and a real call must not be

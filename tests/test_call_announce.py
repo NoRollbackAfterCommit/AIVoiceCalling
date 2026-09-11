@@ -143,3 +143,53 @@ async def test_announce_endpoint_rejects_a_malformed_uuid():
     ) as client:
         resp = await client.post("/api/telephony/announce", data={"uuid": "not-a-uuid"})
     assert resp.status_code == 422
+
+
+async def test_announce_endpoint_refuses_a_malformed_json_body_with_the_same_422():
+    """The dialplan reads this response. A body that is not the JSON it claims
+    to be used to escape `request.json()` as a 500 and a logged traceback on an
+    open path; it must land on the route's existing refusal instead."""
+    app = _app_with_registry()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/telephony/announce",
+            content=b'{"uuid": ',
+            headers={"content-type": "application/json"},
+        )
+    assert resp.status_code == 422, "an unreadable body must refuse, not crash"
+
+
+async def test_announce_endpoint_refuses_a_malformed_form_body_with_the_same_422():
+    """python-multipart raises on a body that is not the form it claims to be.
+    Same shape as the JSON branch, same refusal the dialplan already knows."""
+    app = _app_with_registry()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/telephony/announce",
+            content=b"--zz\r\ngarbage\r\n",
+            headers={"content-type": "multipart/form-data; boundary=zz"},
+        )
+    assert resp.status_code == 422, "an unparseable form must refuse, not crash"
+
+
+async def test_a_negative_content_length_does_not_sail_past_the_ceiling(asgi_post):
+    """`int("-1")` parses, and `-1 > 65536` is False, so a negative declared
+    length skipped the size check entirely and the unbounded read went ahead.
+    Every server in front rejects one today; the guard must not rely on that.
+    """
+    oversized = 8 * 1024 * 1024
+    status, read = await asgi_post(
+        _app_with_registry(),
+        "/api/telephony/announce",
+        headers={
+            "content-type": "application/x-www-form-urlencoded",
+            "content-length": "-1",
+        },
+        body_bytes=oversized,
+    )
+    assert read == 0, "a body behind a negative Content-Length was read anyway"
+    assert status == 411

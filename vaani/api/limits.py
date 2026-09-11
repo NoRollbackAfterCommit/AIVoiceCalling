@@ -52,6 +52,14 @@ def enforce_body_limit(request: Request) -> None:
         log.warning("refused an unreadable Content-Length", extra={"route": request.url.path})
         raise HTTPException(411, "a Content-Length is required on this endpoint") from None
 
+    if length < 0:
+        # `int("-1")` parses happily and `-1 > ceiling` is False, so a negative
+        # declared length skipped the size check and the unbounded read went
+        # ahead. Every server in front rejects one today; the guard in the
+        # process that does the reading should not depend on that.
+        log.warning("refused a negative Content-Length", extra={"route": request.url.path})
+        raise HTTPException(411, "a Content-Length is required on this endpoint")
+
     if length > MAX_WEBHOOK_BODY_BYTES:
         log.warning(
             "refused an oversized request body",

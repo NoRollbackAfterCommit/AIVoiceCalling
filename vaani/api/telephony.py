@@ -8,6 +8,9 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from vaani.api.limits import enforce_body_limit
+from vaani.core.logging import get_logger
+
+log = get_logger(__name__)
 
 router = APIRouter()
 
@@ -38,10 +41,26 @@ async def announce_call(request: Request) -> dict[str, Any]:
 
 
 async def _fields(request: Request) -> dict[str, Any]:
+    """Caller beware: this reads the body, so `enforce_body_limit` comes first.
+
+    Neither branch may raise. This path is open by design, so a body that is not
+    what its content-type claims escaped as a 500 and a logged traceback for any
+    stranger who asked. A body we cannot read simply carries no fields, which
+    leaves the missing uuid on the route's existing 422 — the refusal the
+    dialplan already reads.
+    """
     if "application/json" in request.headers.get("content-type", ""):
-        body = await request.json()
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
         return body if isinstance(body, dict) else {}
-    return dict(await request.form())
+    try:
+        return dict(await request.form())
+    except Exception:
+        # python-multipart raises on a body that is not the form it claims to be.
+        log.warning("an announce body could not be parsed as a form")
+        return {}
 
 
 def _text(value: Any) -> str | None:
