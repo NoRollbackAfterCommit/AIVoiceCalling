@@ -13,7 +13,9 @@ import io
 import json
 import logging
 import math
+import queue
 import struct
+import threading
 import time
 
 import httpx
@@ -813,6 +815,36 @@ def _tone_16k(ms: int, freq: float = 220.0, amplitude: float = 0.5) -> bytes:
     )
 
 
+def _receive_event_within(ws, budget_s: float, seen: list[str]) -> str:
+    """One `ws.receive_text()`, bounded to a wall-clock budget.
+
+    `WebSocketTestSession.receive_text` blocks on an unbounded anyio memory
+    stream: if a regression ever dropped the `clear` send while leaving
+    barge-in detection working, the session would emit no further frame at
+    all, and this call would hang the suite instead of failing it. A daemon
+    thread turns that into something `queue.Queue.get` can time out on; the
+    thread is never joined; it dies on its own once the WebSocket session's
+    streams close at the end of the `with` block, or is abandoned with the
+    process at worst, since it is a daemon.
+    """
+
+    def _recv() -> None:
+        try:
+            box.put(ws.receive_text())
+        except BaseException as exc:  # handed to the waiting side, not swallowed
+            box.put(exc)
+
+    box: queue.Queue[object] = queue.Queue(maxsize=1)
+    threading.Thread(target=_recv, daemon=True).start()
+    try:
+        outcome = box.get(timeout=budget_s)
+    except queue.Empty:
+        pytest.fail(f"waiting for a frame; none arrived within {budget_s}s; saw {seen}")
+    if isinstance(outcome, BaseException):
+        raise outcome
+    return json.loads(outcome).get("event")
+
+
 def test_talking_over_the_agent_puts_a_clear_on_the_wire(smartflo_live):
     """Barge-in on this carrier means `clear`: without it the audio Smartflo has
     already buffered keeps playing after the agent has been cut off."""
@@ -825,9 +857,7 @@ def test_talking_over_the_agent_puts_a_clear_on_the_wire(smartflo_live):
         ws.send_text(_start_frame())
 
         # Wait until the greeting is genuinely flowing before talking over it.
-        for _ in range(40):
-            if json.loads(ws.receive_text()).get("event") == "media":
-                break
+        _first_media(ws)
 
         for offset in range(0, len(speech), 800):  # 100 ms lumps, as Smartflo sends
             chunk = speech[offset : offset + 800]
@@ -841,9 +871,9 @@ def test_talking_over_the_agent_puts_a_clear_on_the_wire(smartflo_live):
                 )
             )
 
-        seen = []
+        seen: list[str] = []
         for _ in range(80):
-            seen.append(json.loads(ws.receive_text()).get("event"))
+            seen.append(_receive_event_within(ws, 2.0, seen))
             if "clear" in seen:
                 break
         assert "clear" in seen, f"barge-in never reached the carrier; saw {seen}"
