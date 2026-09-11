@@ -219,6 +219,9 @@ refuses any extra key and drops the call — inside its 2000 ms budget.
 ### Why the secret is not the API token
 
 That URL sits in Tata's configuration and its logs. The webhook secret grants
-only the ability to ask for a socket URL, and the per-call token in the reply is
-valid for two minutes and can open exactly one call. Neither can reach the
+only the ability to ask for a socket URL, and the per-call token in the reply
+names one call and stops verifying two minutes after it is minted. Nothing marks
+a token as used, so within that window whoever holds it can open the stream
+again — an accepted risk, since the window only has to cover the network hop
+between the handshake and Smartflo's connect. Neither credential can reach the
 settings API, the knowledge base, or a live call.

@@ -7,6 +7,8 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
+from vaani.api.limits import enforce_body_limit
+
 router = APIRouter()
 
 
@@ -17,6 +19,9 @@ async def announce_call(request: Request) -> dict[str, Any]:
     Asterisk's CURL() sends a url-encoded form; anything else integrating here
     sends JSON. Both are accepted so the dialplan stays a one-liner.
     """
+    # Before the body is read, not after: this path is open by design, so an
+    # unbounded read here is an unauthenticated way to exhaust the host's memory.
+    enforce_body_limit(request)
     fields = await _fields(request)
     try:
         canonical = str(uuid.UUID(str(fields.get("uuid") or "").strip()))

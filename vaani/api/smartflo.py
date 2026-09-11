@@ -22,6 +22,8 @@ import binascii
 import contextlib
 import hashlib
 import hmac
+import json
+import logging
 import secrets
 import time
 from typing import Any
@@ -30,6 +32,7 @@ from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 from starlette.responses import JSONResponse
 
 from vaani.api.auth import live_settings
+from vaani.api.limits import enforce_body_limit
 from vaani.core.logging import get_logger
 from vaani.pipeline.manager import CallCapacityError
 from vaani.pipeline.session import CallSession
@@ -82,6 +85,15 @@ def _utf8(text: str) -> bytes | None:
         return None
 
 
+def _is_the_secret(presented: str, expected: bytes | None) -> bool:
+    """Constant-time, and never a raise: both sides may hold anything a stranger
+    typed, and an unconfigured secret must refuse rather than accept everything."""
+    candidate = _utf8(presented)
+    if not expected or candidate is None:
+        return False
+    return hmac.compare_digest(candidate, expected)
+
+
 def mint_call_token(secret: str, call_id: str, *, now: float | None = None) -> str:
     exp = int((time.time() if now is None else now) + CALL_TOKEN_TTL_S)
     encoded = _encode(call_id)
@@ -115,7 +127,10 @@ def verify_call_token(secret: str, token: str, *, now: float | None = None) -> s
 
 
 async def _fields(request: Request) -> dict[str, Any]:
-    """Smartflo may GET with query parameters or POST JSON or a form."""
+    """Smartflo may GET with query parameters or POST JSON or a form.
+
+    Caller beware: this reads the body, so `enforce_body_limit` comes first.
+    """
     merged: dict[str, Any] = dict(request.query_params)
     if request.method == "POST":
         if "application/json" in request.headers.get("content-type", ""):
@@ -126,7 +141,16 @@ async def _fields(request: Request) -> dict[str, Any]:
             if isinstance(body, dict):
                 merged.update(body)
         else:
-            merged.update(dict(await request.form()))
+            try:
+                form = dict(await request.form())
+            except Exception:
+                # python-multipart raises on a body that is not the form it
+                # claims to be. Unguarded, that escaped as a 500 and a logged
+                # traceback on a path any stranger can reach; a body we cannot
+                # read simply carries no fields, exactly as on the JSON branch.
+                log.warning("a Smartflo handshake body could not be parsed as a form")
+                form = {}
+            merged.update(form)
     return merged
 
 
@@ -142,10 +166,20 @@ async def smartflo_handshake(request: Request) -> JSONResponse:
         return JSONResponse({"detail": "Smartflo is not enabled"}, status_code=404)
 
     secret = getattr(settings, "smartflo_webhook_secret", "") or ""
-    fields = await _fields(request)
     expected = _utf8(secret)
-    presented = _utf8(str(fields.get("key") or ""))
-    if not expected or presented is None or not hmac.compare_digest(presented, expected):
+
+    # The documented endpoint URL carries the secret in the query string, so in
+    # the normal case authentication is settled here, before a byte of the body
+    # is touched. A body only gets parsed for someone who already proved they
+    # know the secret, or who left the query out entirely.
+    in_query = request.query_params.get("key")
+    if in_query is not None and not _is_the_secret(in_query, expected):
+        log.warning("refused a Smartflo handshake with a bad secret")
+        return JSONResponse({"detail": "invalid webhook secret"}, status_code=401)
+
+    enforce_body_limit(request)
+    fields = await _fields(request)
+    if in_query is None and not _is_the_secret(str(fields.get("key") or ""), expected):
         log.warning("refused a Smartflo handshake with a bad secret")
         return JSONResponse({"detail": "invalid webhook secret"}, status_code=401)
 
@@ -205,15 +239,21 @@ async def smartflo_stream(ws: WebSocket) -> None:
 
     # Nothing to build until `start`: the caller's number and the stream id
     # arrive there, and no audio comes before it.
+    tally = _FrameTally()
     try:
-        start = await asyncio.wait_for(_await_start(ws), timeout=START_DEADLINE_S)
+        start = await asyncio.wait_for(_await_start(ws, tally), timeout=START_DEADLINE_S)
     except TimeoutError:
         # Nothing is registered yet, so a socket parked here is invisible to the
         # concurrency cap, to `live()` and to `drain()` — a shutdown would not
         # even wait for it. A valid token must not buy one of those indefinitely.
         log.warning(
             "smartflo stream sent no start frame; closing",
-            extra={"token_call_id": call_ref, "deadline_s": START_DEADLINE_S},
+            extra={
+                "token_call_id": call_ref,
+                "deadline_s": START_DEADLINE_S,
+                # What did arrive, in case `start` is here under another name.
+                "frame_counts": tally.snapshot(),
+            },
         )
         start = None
     if start is None:
@@ -259,7 +299,7 @@ async def smartflo_stream(ws: WebSocket) -> None:
 
     session_task = asyncio.create_task(session.run(), name=f"session:{session.call_id}")
     reader_task = asyncio.create_task(
-        _read(ws, transport, session), name=f"reader:{session.call_id}"
+        _read(ws, transport, session, tally), name=f"reader:{session.call_id}"
     )
     try:
         done, pending = await asyncio.wait(
@@ -287,7 +327,72 @@ async def smartflo_stream(ws: WebSocket) -> None:
         await _close(ws)
 
 
-async def _await_start(ws: WebSocket) -> SmartfloEvent | None:
+class _FrameTally:
+    """Counts the frames a call took no action on, and describes the first one.
+
+    Discarding them in silence hides the likeliest first-live-call failure there
+    is: if Tata's media arrives in a shape `parse_frame` does not match, every
+    frame comes back `invalid`, the caller talks into silence, the idle hangup
+    ends the call ninety seconds later, and the log for it holds the greeting and
+    nothing else. A line per frame is no better — ten a second is nine hundred
+    lines for that one call — so the first is described and the rest are counted.
+    """
+
+    __slots__ = ("_described", "counts")
+
+    def __init__(self) -> None:
+        self.counts: dict[str, int] = {}
+        self._described = False
+
+    def note(self, kind: str, raw: str | bytes) -> None:
+        self.counts[kind] = self.counts.get(kind, 0) + 1
+        if kind != "invalid" or self._described:
+            return
+        self._described = True
+        # Structure, not content: the keys are what diagnoses a shape mismatch,
+        # and unlike the body they carry no audio and nothing the caller said.
+        log.info(
+            "smartflo sent a frame the parser does not recognise",
+            extra={"frame_shape": _frame_shape(raw), "frame_bytes": len(raw)},
+        )
+        # The body itself only at debug, where an operator has asked for it.
+        log.debug("unrecognised smartflo frame", extra={"frame_body": _preview(raw)})
+
+    def snapshot(self) -> dict[str, int]:
+        return dict(self.counts)
+
+    def report(self) -> None:
+        if not self.counts:
+            return
+        # A warning only when something was unreadable: `connected` and a
+        # repeated `start` are ordinary traffic and would be noise on every call.
+        log.log(
+            logging.WARNING if self.counts.get("invalid") else logging.DEBUG,
+            "smartflo frames the call did not act on",
+            extra={"frame_counts": self.snapshot()},
+        )
+
+
+def _frame_shape(raw: str | bytes) -> str:
+    """What an unrecognised frame looked like, with none of what it held."""
+    if isinstance(raw, bytes):
+        return "binary"
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        # Including RecursionError on a deeply nested payload, as parse_frame does.
+        return "not json"
+    if not isinstance(parsed, dict):
+        return f"json {type(parsed).__name__}"
+    return ",".join(sorted(str(key)[:24] for key in parsed)[:8]) or "empty object"
+
+
+def _preview(raw: str | bytes) -> str:
+    text = raw if isinstance(raw, str) else raw.decode("utf-8", "replace")
+    return text[:200]
+
+
+async def _await_start(ws: WebSocket, tally: _FrameTally) -> SmartfloEvent | None:
     """The `start` frame, or None if the socket ends before one arrives."""
     while (raw := await _next_frame(ws)) is not None:
         event = parse_frame(raw)
@@ -295,22 +400,36 @@ async def _await_start(ws: WebSocket) -> SmartfloEvent | None:
             return event
         if event.kind == "stop":
             return None
+        # Nothing else advances the wait. Counted anyway: if a live `start` ever
+        # arrives in a shape the parser misses, what did arrive is the only
+        # diagnosis the operator gets, and the deadline's warning carries it.
+        tally.note(event.kind, raw)
     return None
 
 
-async def _read(ws: WebSocket, transport: SmartfloTransport, session: CallSession) -> None:
+async def _read(
+    ws: WebSocket, transport: SmartfloTransport, session: CallSession, tally: _FrameTally
+) -> None:
     """Feeds the session until Smartflo sends `stop` or drops the socket."""
-    while (raw := await _next_frame(ws)) is not None:
-        event = parse_frame(raw)
-        if event.kind == "media" and event.pcm:
-            await session.push_audio(event.pcm)
-        elif event.kind == "dtmf" and event.digit:
-            await session.push_dtmf(event.digit)
-        elif event.kind == "mark":
-            transport.note_mark(event.mark_name)
-        elif event.kind == "stop":
-            return
-        # `connected`, a repeated `start`, `invalid`: nothing a live call acts on.
+    try:
+        while (raw := await _next_frame(ws)) is not None:
+            event = parse_frame(raw)
+            if event.kind == "media" and event.pcm:
+                await session.push_audio(event.pcm)
+            elif event.kind == "dtmf" and event.digit:
+                await session.push_dtmf(event.digit)
+            elif event.kind == "mark":
+                transport.note_mark(event.mark_name)
+            elif event.kind == "stop":
+                return
+            else:
+                # `connected`, a repeated `start`, `invalid`: nothing a live call
+                # acts on, but a stream of them is why a call was silent.
+                tally.note(event.kind, raw)
+    finally:
+        # In a finally so the count survives the cancellation that ends this task
+        # when the agent, not the caller, hangs up first.
+        tally.report()
 
 
 async def _next_frame(ws: WebSocket) -> str | bytes | None:

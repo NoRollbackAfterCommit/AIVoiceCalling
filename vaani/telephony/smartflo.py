@@ -70,12 +70,18 @@ class SmartfloTransport:
             return
         async with self._lock:
             self._pending.extend(pcm16_to_ulaw(pcm))
-            usable = (len(self._pending) // ULAW_FRAME_BYTES) * ULAW_FRAME_BYTES
-            if not usable:
-                return
-            chunk = bytes(self._pending[:usable])
-            del self._pending[:usable]
-            await self._send(media_frame(self.stream_sid, chunk, self._next_seq()))
+            # One frame per 160 bytes, the same pattern as AudioSocketTransport
+            # and the same shape the carrier sends us. Sarvam yields
+            # network-sized HTTP chunks, so the whole buffer in one message put
+            # two seconds of audio in a single ~22 KB base64 frame — a size no
+            # Tata document describes, against a carrier that drops a call over
+            # one unexpected key in a JSON body. The audio is identical either
+            # way. Sequence numbers are still allocated and sent in order under
+            # the lock, so a `clear` cannot overtake the media it is flushing.
+            while self._open and len(self._pending) >= ULAW_FRAME_BYTES:
+                frame = bytes(self._pending[:ULAW_FRAME_BYTES])
+                del self._pending[:ULAW_FRAME_BYTES]
+                await self._send(media_frame(self.stream_sid, frame, self._next_seq()))
 
     async def send_event(self, event: dict[str, Any]) -> None:
         kind = event.get("type")

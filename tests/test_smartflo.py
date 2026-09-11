@@ -195,6 +195,27 @@ async def test_agent_audio_goes_out_as_multiples_of_160_mulaw_bytes():
     assert sum(len(base64.b64decode(f["media"]["payload"])) for f in media) == 1600
 
 
+async def test_agent_audio_goes_out_one_twenty_millisecond_frame_per_message():
+    """One media message per 160 bytes, as the carrier itself sends.
+
+    Sarvam yields network-sized HTTP chunks, so the whole buffer in one message
+    put two seconds of audio in a single ~22 KB base64 frame — a size no Tata
+    document describes, against a carrier that drops a call over one extra key
+    in a JSON body. The audio delivered is identical either way, so it goes out
+    in the shape the carrier is known to accept.
+    """
+    sink = _Sink()
+    transport = SmartfloTransport(sink, stream_sid="MZ1")
+
+    await transport.send_audio(_pcm_silence_16k(200))  # ten 20 ms frames' worth
+
+    media = sink.of_event("media")
+    sizes = [len(base64.b64decode(f["media"]["payload"])) for f in media]
+    assert sizes == [ULAW_FRAME_BYTES] * 10, f"expected ten 160-byte frames, got {sizes}"
+    # Still allocated in send order, still inside the lock.
+    assert [int(f["sequenceNumber"]) for f in media] == list(range(1, 11))
+
+
 async def test_a_remainder_is_held_back_rather_than_sent_short():
     sink = _Sink()
     transport = SmartfloTransport(sink, stream_sid="MZ1")
@@ -342,6 +363,22 @@ def test_a_token_with_non_ascii_or_unencodable_parts_is_refused_not_raised():
 # -- Handshake endpoint ---------------------------------------------------------
 
 
+def _handshake_app(settings):
+    """The app the handshake tests drive. Separate from the fixture below so the
+    raw-ASGI tests can reach the app object rather than an httpx client."""
+    return create_app(
+        settings.model_copy(
+            update={
+                "env": "dev",
+                "api_token": "admin-token",
+                "smartflo_enabled": True,
+                "smartflo_webhook_secret": "hook-secret",
+                "smartflo_public_host": "voice.example.in",
+            }
+        )
+    )
+
+
 @pytest.fixture
 async def smartflo_app(settings):
     """The real app, with Smartflo switched on and a known secret.
@@ -354,17 +391,7 @@ async def smartflo_app(settings):
     handshake must touch no provider, so none is built: a regression there
     fails loudly on a missing attribute instead of passing against a mock.
     """
-    app = create_app(
-        settings.model_copy(
-            update={
-                "env": "dev",
-                "api_token": "admin-token",
-                "smartflo_enabled": True,
-                "smartflo_webhook_secret": "hook-secret",
-                "smartflo_public_host": "voice.example.in",
-            }
-        )
-    )
+    app = _handshake_app(settings)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -487,6 +514,87 @@ def test_a_broken_configured_secret_never_verifies():
     assert verify_call_token("\ud800", "AAA.100.abc") is None
 
 
+# -- What the handshake will read before it decides anything --------------------
+
+OVERSIZED = 8 * 1024 * 1024  # far over the ceiling; small enough that a regression is survivable
+
+
+async def test_a_handshake_body_over_the_ceiling_is_refused_before_it_is_read(settings, asgi_post):
+    """This path is exempt from the bearer guard, so a stranger reaches it with
+    no credential at all. Reading first meant a POST that declared two gigabytes
+    became two gigabytes of RSS on a VM that shares its memory with a government
+    website — and a second of parsing on the loop every live call is paced from.
+    """
+    status, read = await asgi_post(
+        _handshake_app(settings),
+        HANDSHAKE,
+        query="key=hook-secret",
+        headers={"content-type": "application/json", "content-length": str(OVERSIZED)},
+        body_bytes=OVERSIZED,
+    )
+    assert status == 413
+    assert read == 0, "the body was buffered before its declared size was checked"
+
+
+async def test_a_handshake_that_declares_no_length_is_refused_before_it_is_read(
+    settings, asgi_post
+):
+    """Chunked transfer is a Content-Length-shaped hole: the size is only known
+    once the whole body has arrived, which is the read the ceiling exists to
+    prevent. Neither Tata nor a browser needs to stream a handful of fields."""
+    status, read = await asgi_post(
+        _handshake_app(settings),
+        HANDSHAKE,
+        query="key=hook-secret",
+        headers={"content-type": "application/json", "transfer-encoding": "chunked"},
+        body_bytes=OVERSIZED,
+    )
+    assert status == 411
+    assert read == 0, "an undeclared body was buffered anyway"
+
+
+async def test_a_wrong_secret_in_the_query_is_refused_before_the_body_is_read(settings, asgi_post):
+    """The documented endpoint URL carries the secret in the query string, so in
+    the normal case the secret can be settled without touching the body at all.
+    Under the ceiling on purpose: this is the authenticate-first half, not the
+    size half."""
+    status, read = await asgi_post(
+        _handshake_app(settings),
+        HANDSHAKE,
+        query="key=wrong",
+        headers={"content-type": "application/json", "content-length": "4096"},
+        body_bytes=4096,
+    )
+    assert status == 401
+    assert read == 0, "a stranger's body was parsed before their secret was checked"
+
+
+async def test_a_body_under_the_ceiling_is_still_read(settings, asgi_post):
+    """The guard must refuse size, not bodies. A POST whose callId is in the body
+    still has to be read, or every real Smartflo callback loses its call id."""
+    status, read = await asgi_post(
+        _handshake_app(settings),
+        HANDSHAKE,
+        query="key=hook-secret",
+        headers={"content-type": "application/json", "content-length": "2"},
+        body_bytes=2,
+    )
+    assert status == 200
+    assert read == 2
+
+
+async def test_a_malformed_form_body_is_refused_not_a_server_error(smartflo_app):
+    """python-multipart raises on a body that is not the form it claims to be.
+    Only the JSON branch was guarded, so this escaped as a 500 and a logged
+    traceback on a public, unauthenticated path."""
+    response = await smartflo_app.post(
+        HANDSHAKE,
+        content=b"--zz\r\ngarbage\r\n",
+        headers={"content-type": "multipart/form-data; boundary=zz"},
+    )
+    assert response.status_code == 401, "an unparseable form must refuse, not crash"
+
+
 # -- The call itself, over the WebSocket ----------------------------------------
 
 
@@ -571,11 +679,49 @@ def _stop_frame(stream_sid: str = "MZ1") -> str:
     return json.dumps({"event": "stop", "streamSid": stream_sid})
 
 
+# Every wait on a frame is bounded by this. Generous, because the session paces
+# playback against the wall clock and CI is slower than a laptop; the number
+# matters far less than having one, since an unbounded wait turns a regression
+# into a hung job instead of a failure.
+FRAME_BUDGET_S = 10.0
+
+
+def _receive_text_within(ws, budget_s: float, waiting_for: str) -> str:
+    """One `ws.receive_text()`, bounded to a wall-clock budget.
+
+    `WebSocketTestSession.receive_text` blocks on an unbounded anyio memory
+    stream, so every regression these tests exist to catch — a `clear` that
+    never reaches the carrier, a socket the endpoint never closes, a `start`
+    deadline that stops firing — would hang CI rather than fail it. A daemon
+    thread turns that into something `queue.Queue.get` can time out on; the
+    thread is never joined; it dies on its own once the WebSocket session's
+    streams close at the end of the `with` block, or is abandoned with the
+    process at worst, since it is a daemon.
+    """
+
+    def _recv() -> None:
+        try:
+            box.put(ws.receive_text())
+        except BaseException as exc:  # handed to the waiting side, not swallowed
+            box.put(exc)
+
+    box: queue.Queue[object] = queue.Queue(maxsize=1)
+    threading.Thread(target=_recv, daemon=True).start()
+    try:
+        outcome = box.get(timeout=budget_s)
+    except queue.Empty:
+        pytest.fail(f"{waiting_for}: nothing arrived within {budget_s}s")
+    if isinstance(outcome, BaseException):
+        raise outcome
+    return outcome  # type: ignore[return-value]
+
+
 def _first_media(ws) -> dict:
     """The transport puts only media, mark and clear on the wire, so the
     greeting's first media frame is the first thing to arrive."""
     for _ in range(40):
-        frame = json.loads(ws.receive_text())
+        raw = _receive_text_within(ws, FRAME_BUDGET_S, "waiting for the agent's first media frame")
+        frame = json.loads(raw)
         if frame.get("event") == "media":
             return frame
     pytest.fail("the agent never sent audio back")
@@ -586,14 +732,21 @@ def _until_closed(ws) -> None:
     The transport leaves the socket open on purpose; closing it is the
     endpoint's job, and Smartflo keeps the line up until it happens.
 
-    The cap only has to sit above one whole greeting: a starved loop catches up
-    on pacing by bursting the rest of the utterance ahead of the close."""
-    for _ in range(2000):
+    The cap only has to sit above one whole greeting, which is now one message
+    per 20 ms of audio: a starved loop catches up on pacing by bursting the rest
+    of the utterance ahead of the close."""
+    for _ in range(4000):
         try:
-            ws.receive_text()
+            _receive_text_within(ws, FRAME_BUDGET_S, "waiting for the endpoint to close the socket")
         except WebSocketDisconnect:
             return
     pytest.fail("the endpoint never closed the socket")
+
+
+def _expect_close_within(ws, budget_s: float = FRAME_BUDGET_S) -> None:
+    """The endpoint must close this socket, and must do it in bounded time."""
+    with pytest.raises(WebSocketDisconnect):
+        _receive_text_within(ws, budget_s, "waiting for the endpoint to close the socket")
 
 
 def test_websocket_refuses_a_bad_token(smartflo_live):
@@ -678,8 +831,7 @@ def test_a_call_past_capacity_is_refused_at_start(settings, monkeypatch, tmp_pat
             spare_token = _call_token(client, "CA2")
             with client.websocket_connect(f"/ws/smartflo?token={spare_token}") as ws:
                 ws.send_text(_start_frame(stream_sid="MZ2"))
-                with pytest.raises(WebSocketDisconnect):
-                    ws.receive_text()
+                _expect_close_within(ws)
 
             busy.send_text(_stop_frame("MZ1"))
             _until_closed(busy)
@@ -758,8 +910,7 @@ def test_a_socket_that_never_sends_start_is_closed_not_held(settings, monkeypatc
         token = _call_token(client, "CA-silent")
         with _endpoint_log() as records:
             with client.websocket_connect(f"/ws/smartflo?token={token}") as ws:
-                with pytest.raises(WebSocketDisconnect):
-                    ws.receive_text()  # nothing sent; the deadline must close it
+                _expect_close_within(ws)  # nothing sent; the deadline must close it
         assert client.app.state.calls.live_count == 0
 
     warned = _wait_for_record(records, lambda r: "start" in r.getMessage())
@@ -798,10 +949,70 @@ def test_a_start_without_a_stream_id_is_refused_loudly(smartflo_live):
                 lambda r: r.levelno >= logging.ERROR and "streamSid" in r.getMessage(),
             )
             assert complained is not None, "a silent line must be loud in the log"
-            with pytest.raises(WebSocketDisconnect):
-                ws.receive_text()
+            _expect_close_within(ws)
 
     assert smartflo_live.app.state.calls.live_count == 0
+
+
+def test_frames_the_parser_cannot_read_are_counted_not_discarded_in_silence(smartflo_live):
+    """The likeliest first-live-call failure, and the hardest to diagnose.
+
+    If Tata's media arrives in a shape `parse_frame` does not match, every frame
+    comes back `invalid`, the caller talks into silence, and the idle hangup ends
+    the call ninety seconds later with a log containing the greeting and nothing
+    else. One count is the whole diagnosis — and at ten frames a second it has to
+    be a count, not nine hundred lines.
+    """
+    token = _call_token(smartflo_live)
+    strange = json.dumps({"type": "audio", "data": "body-marker-that-must-not-be-logged"})
+
+    with _endpoint_log() as records:
+        with smartflo_live.websocket_connect(f"/ws/smartflo?token={token}") as ws:
+            ws.send_text(_start_frame())
+            _first_media(ws)
+            for _ in range(30):
+                ws.send_text(strange)
+            ws.send_text(_stop_frame())
+            _until_closed(ws)
+
+        summary = _wait_for_record(records, lambda r: "did not act on" in r.getMessage())
+
+    assert summary is not None, "a stream nothing could read must reach the log"
+    assert summary.levelno >= logging.WARNING, "an operator watching at INFO must see it"
+    assert getattr(summary, "frame_counts", {}).get("invalid") == 30
+
+    sightings = [r for r in records if "does not recognise" in r.getMessage()]
+    assert len(sightings) == 1, f"thirty frames must not write thirty lines; wrote {len(sightings)}"
+    # The keys are the diagnosis: "data,type" is not "event,media".
+    assert getattr(sightings[0], "frame_shape", "") == "data,type"
+    assert not any(
+        "body-marker" in str(record.__dict__)
+        for record in records
+        if record.levelno > logging.DEBUG
+    ), "the raw frame body must not be logged above debug"
+
+
+def test_frames_seen_while_waiting_for_start_are_reported_with_the_timeout(
+    settings, monkeypatch, tmp_path
+):
+    """`_await_start` drops everything that is not start or stop. If Tata's start
+    frame is shaped differently the operator's only clue was a socket that said
+    nothing; what did arrive is the diagnosis, so it goes in the same warning."""
+    monkeypatch.setattr("vaani.api.smartflo.START_DEADLINE_S", 1.0)
+    with _live_app(settings, monkeypatch, tmp_path) as client:
+        token = _call_token(client, "CA-odd-start")
+        with _endpoint_log() as records:
+            with client.websocket_connect(f"/ws/smartflo?token={token}") as ws:
+                ws.send_text(json.dumps({"event": "connected", "protocol": "Call"}))
+                for _ in range(5):
+                    ws.send_text(json.dumps({"type": "start", "streamId": "MZ1"}))
+                _expect_close_within(ws)
+
+    warned = _wait_for_record(records, lambda r: "no start frame" in r.getMessage())
+    assert warned is not None, "an abandoned socket must say so in the log"
+    counts = getattr(warned, "frame_counts", {})
+    assert counts.get("invalid") == 5, f"the frames that did arrive must be on the record: {counts}"
+    assert counts.get("connected") == 1
 
 
 # -- Barge-in reaching the carrier -----------------------------------------------
@@ -816,33 +1027,9 @@ def _tone_16k(ms: int, freq: float = 220.0, amplitude: float = 0.5) -> bytes:
 
 
 def _receive_event_within(ws, budget_s: float, seen: list[str]) -> str:
-    """One `ws.receive_text()`, bounded to a wall-clock budget.
-
-    `WebSocketTestSession.receive_text` blocks on an unbounded anyio memory
-    stream: if a regression ever dropped the `clear` send while leaving
-    barge-in detection working, the session would emit no further frame at
-    all, and this call would hang the suite instead of failing it. A daemon
-    thread turns that into something `queue.Queue.get` can time out on; the
-    thread is never joined; it dies on its own once the WebSocket session's
-    streams close at the end of the `with` block, or is abandoned with the
-    process at worst, since it is a daemon.
-    """
-
-    def _recv() -> None:
-        try:
-            box.put(ws.receive_text())
-        except BaseException as exc:  # handed to the waiting side, not swallowed
-            box.put(exc)
-
-    box: queue.Queue[object] = queue.Queue(maxsize=1)
-    threading.Thread(target=_recv, daemon=True).start()
-    try:
-        outcome = box.get(timeout=budget_s)
-    except queue.Empty:
-        pytest.fail(f"waiting for a frame; none arrived within {budget_s}s; saw {seen}")
-    if isinstance(outcome, BaseException):
-        raise outcome
-    return json.loads(outcome).get("event")
+    """The name of the next frame's event, bounded the same way."""
+    raw = _receive_text_within(ws, budget_s, f"waiting for a frame; saw {seen}")
+    return json.loads(raw).get("event")
 
 
 def test_talking_over_the_agent_puts_a_clear_on_the_wire(smartflo_live):

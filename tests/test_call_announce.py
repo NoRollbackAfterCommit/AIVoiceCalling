@@ -115,6 +115,27 @@ async def test_announce_endpoint_treats_withheld_caller_as_unknown():
     assert claimed is not None and claimed.caller_number is None
 
 
+async def test_an_announce_body_over_the_ceiling_is_refused_before_it_is_read(asgi_post):
+    """This path is open by design — a token here would sit in the dialplan file
+    in cleartext — so anything that can reach the LAN can post to it. Reading the
+    body before deciding anything turned that into an unauthenticated way to make
+    the process buffer whatever a stranger cared to send, on a host that also
+    serves a government website.
+    """
+    oversized = 8 * 1024 * 1024  # far over the ceiling; small enough to survive a regression
+    status, read = await asgi_post(
+        _app_with_registry(),
+        "/api/telephony/announce",
+        headers={
+            "content-type": "application/x-www-form-urlencoded",
+            "content-length": str(oversized),
+        },
+        body_bytes=oversized,
+    )
+    assert status == 413
+    assert read == 0, "the body was buffered before its declared size was checked"
+
+
 async def test_announce_endpoint_rejects_a_malformed_uuid():
     app = _app_with_registry()
     async with httpx.AsyncClient(
