@@ -46,6 +46,15 @@ ws_router = APIRouter()
 # cover a network hop. Anything longer is replay surface for no benefit.
 CALL_TOKEN_TTL_S = 120
 
+# How long an accepted socket may stay silent before `start` arrives. Smartflo
+# sends `connected` then `start` back to back, so the real gap is one network
+# hop; ten seconds is three orders of magnitude of headroom for a carrier-side
+# stall, and still under uvicorn's 20 s WebSocket ping interval, so an abandoned
+# socket is gone before the keepalive would even go looking for it. Not a
+# setting: an operator has nothing to weigh here, and a value low enough to drop
+# real calls or high enough to matter would both be mistakes.
+START_DEADLINE_S = 10.0
+
 
 def _sign(secret: str, payload: str) -> str:
     return hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
@@ -196,11 +205,35 @@ async def smartflo_stream(ws: WebSocket) -> None:
 
     # Nothing to build until `start`: the caller's number and the stream id
     # arrive there, and no audio comes before it.
-    start = await _await_start(ws)
+    try:
+        start = await asyncio.wait_for(_await_start(ws), timeout=START_DEADLINE_S)
+    except TimeoutError:
+        # Nothing is registered yet, so a socket parked here is invisible to the
+        # concurrency cap, to `live()` and to `drain()` — a shutdown would not
+        # even wait for it. A valid token must not buy one of those indefinitely.
+        log.warning(
+            "smartflo stream sent no start frame; closing",
+            extra={"token_call_id": call_ref, "deadline_s": START_DEADLINE_S},
+        )
+        start = None
     if start is None:
         await _close(ws)
         return
-    transport.stream_sid = start.stream_sid or ""
+    if not start.stream_sid:
+        # Every outbound frame carries the stream id, and `send_audio` drops the
+        # lot without one: the call would run to its idle timeout as a registered,
+        # connected line with dead air on it. Refusing costs the caller a redial
+        # and gives the operator the reason; keeping it would cost them the call
+        # anyway, plus a line out of the capacity budget and a call record that
+        # looks like it worked.
+        log.error(
+            "smartflo start carried no streamSid; refusing the call, since the "
+            "line would be silent for its whole duration",
+            extra={"call_sid": start.call_sid or "", "token_call_id": call_ref},
+        )
+        await _close(ws)
+        return
+    transport.stream_sid = start.stream_sid
 
     services = ws.app.state.services
     manager = ws.app.state.calls

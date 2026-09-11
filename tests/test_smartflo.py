@@ -699,3 +699,101 @@ def test_the_live_fixture_ignores_a_settings_file_on_disk(settings, monkeypatch,
             _first_media(ws)
             ws.send_text(_stop_frame())
             _until_closed(ws)
+
+
+class _EndpointLog(logging.Handler):
+    """Captures the endpoint's own records.
+
+    Not caplog: `create_app` calls `configure_logging`, which replaces the root
+    handlers and takes pytest's capture handler with them, so anything logged
+    after the app boots would be lost. A handler on the module's logger survives
+    that, because `configure_logging` never touches non-root loggers' handlers.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.DEBUG)
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+@contextlib.contextmanager
+def _endpoint_log():
+    logger = logging.getLogger("vaani.api.smartflo")
+    handler = _EndpointLog()
+    logger.addHandler(handler)
+    try:
+        yield handler.records
+    finally:
+        logger.removeHandler(handler)
+
+
+def _wait_for_record(records, predicate, timeout: float = 2.0) -> logging.LogRecord | None:
+    """The handler runs on the TestClient's loop thread, so a match may not have
+    landed by the time the sending call returns."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for record in list(records):
+            if predicate(record):
+                return record
+        time.sleep(0.02)
+    return None
+
+
+def test_a_socket_that_never_sends_start_is_closed_not_held(settings, monkeypatch, tmp_path):
+    """A valid token must not buy an untracked socket.
+
+    Before `start` the call is not registered, so the socket is invisible to the
+    concurrency cap, to `live()` and to `drain()`: a peer that connects and then
+    says nothing would otherwise hold one open for as long as it liked.
+    """
+    monkeypatch.setattr("vaani.api.smartflo.START_DEADLINE_S", 0.2)
+    with _live_app(settings, monkeypatch, tmp_path) as client:
+        token = _call_token(client, "CA-silent")
+        with _endpoint_log() as records:
+            with client.websocket_connect(f"/ws/smartflo?token={token}") as ws:
+                with pytest.raises(WebSocketDisconnect):
+                    ws.receive_text()  # nothing sent; the deadline must close it
+        assert client.app.state.calls.live_count == 0
+
+    warned = _wait_for_record(records, lambda r: "start" in r.getMessage())
+    assert warned is not None, "an abandoned socket must say so in the log"
+    assert warned.levelno >= logging.WARNING
+    # The call id from the token is the only handle an operator has here: no
+    # session exists yet, so nothing else ties the socket to a call.
+    assert getattr(warned, "token_call_id", None) == "CA-silent"
+
+
+def test_a_start_without_a_stream_id_is_refused_loudly(smartflo_live):
+    """No stream id means `send_audio` returns early for the whole call.
+
+    Left to run, that is a registered, connected line with dead air on it and
+    nothing in the log to explain why. It is refused instead, so the slot goes
+    back and the cause is on the record.
+    """
+    token = _call_token(smartflo_live)
+    with _endpoint_log() as records:
+        with smartflo_live.websocket_connect(f"/ws/smartflo?token={token}") as ws:
+            ws.send_text(
+                json.dumps(
+                    {
+                        "event": "start",
+                        "start": {
+                            "callSid": "CA9",
+                            "from": "+919876543210",
+                            "to": "+911140000000",
+                            "direction": "inbound",
+                        },
+                    }
+                )
+            )
+            complained = _wait_for_record(
+                records,
+                lambda r: r.levelno >= logging.ERROR and "streamSid" in r.getMessage(),
+            )
+            assert complained is not None, "a silent line must be loud in the log"
+            with pytest.raises(WebSocketDisconnect):
+                ws.receive_text()
+
+    assert smartflo_live.app.state.calls.live_count == 0
