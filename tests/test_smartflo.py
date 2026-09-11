@@ -12,6 +12,8 @@ import contextlib
 import io
 import json
 import logging
+import math
+import struct
 import time
 
 import httpx
@@ -20,6 +22,7 @@ from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from vaani.api.smartflo import CALL_TOKEN_TTL_S, mint_call_token, verify_call_token
+from vaani.audio.resample import pcm16_to_ulaw
 from vaani.config import Settings
 from vaani.core.logging import configure_logging
 from vaani.main import create_app
@@ -797,3 +800,53 @@ def test_a_start_without_a_stream_id_is_refused_loudly(smartflo_live):
                 ws.receive_text()
 
     assert smartflo_live.app.state.calls.live_count == 0
+
+
+# -- Barge-in reaching the carrier -----------------------------------------------
+
+
+def _tone_16k(ms: int, freq: float = 220.0, amplitude: float = 0.5) -> bytes:
+    n = 16 * ms
+    return struct.pack(
+        f"<{n}h",
+        *(int(amplitude * 32767 * math.sin(2 * math.pi * freq * i / 16000)) for i in range(n)),
+    )
+
+
+def test_talking_over_the_agent_puts_a_clear_on_the_wire(smartflo_live):
+    """Barge-in on this carrier means `clear`: without it the audio Smartflo has
+    already buffered keeps playing after the agent has been cut off."""
+    token = _call_token(smartflo_live)
+
+    # Real speech, not silence: the barge-in detector needs sustained voiced audio.
+    speech = pcm16_to_ulaw(_tone_16k(600))
+
+    with smartflo_live.websocket_connect(f"/ws/smartflo?token={token}") as ws:
+        ws.send_text(_start_frame())
+
+        # Wait until the greeting is genuinely flowing before talking over it.
+        for _ in range(40):
+            if json.loads(ws.receive_text()).get("event") == "media":
+                break
+
+        for offset in range(0, len(speech), 800):  # 100 ms lumps, as Smartflo sends
+            chunk = speech[offset : offset + 800]
+            ws.send_text(
+                json.dumps(
+                    {
+                        "event": "media",
+                        "streamSid": "MZ1",
+                        "media": {"payload": base64.b64encode(chunk).decode()},
+                    }
+                )
+            )
+
+        seen = []
+        for _ in range(80):
+            seen.append(json.loads(ws.receive_text()).get("event"))
+            if "clear" in seen:
+                break
+        assert "clear" in seen, f"barge-in never reached the carrier; saw {seen}"
+
+        ws.send_text(_stop_frame())
+        _until_closed(ws)
