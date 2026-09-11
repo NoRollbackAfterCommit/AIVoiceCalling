@@ -537,6 +537,41 @@ class Settings(BaseSettings):
         ge=1024,
         le=65535,
     )
+    smartflo_enabled: bool = cfg(
+        False,
+        group="Telephony",
+        label="Tata Smartflo voice bot",
+        restart=False,
+        help="Accept calls streamed by Tata Smartflo's voice-bot channel. Tata must "
+        "enable Channels Hub on the account first; setup is in docs/telephony.md.",
+    )
+    smartflo_webhook_secret: str = cfg(
+        "",
+        group="Telephony",
+        label="Smartflo webhook secret",
+        secret=True,
+        restart=False,
+        help="Shared secret Smartflo puts in the dynamic-endpoint URL, and the key that "
+        "signs the per-call token in the wss_url handed back. Deliberately not the API "
+        "token: it travels in a URL that lands in the carrier's logs, so a leak there "
+        "must not reach the control plane.",
+    )
+    smartflo_public_host: str = cfg(
+        "",
+        group="Telephony",
+        label="Smartflo public host",
+        restart=False,
+        help="Host used to build the wss_url, e.g. voice.example.in. Not taken from "
+        "request headers: behind a proxy those are attacker-influenced, and Smartflo "
+        "refuses anything but an exact URL.",
+    )
+    smartflo_agent: str = cfg(
+        "default",
+        group="Telephony",
+        label="Smartflo agent profile",
+        restart=False,
+        help="Agent profile that answers Smartflo calls.",
+    )
 
     # ---- storage ----------------------------------------------------------
     recordings_dir: str = cfg(

@@ -191,7 +191,9 @@ def test_parse_start_carries_the_caller_and_stream():
 
 def test_parse_media_decodes_mulaw_to_pipeline_audio():
     payload = base64.b64encode(_ulaw_silence(100)).decode()
-    event = parse_frame(json.dumps({"event": "media", "streamSid": "MZ1", "media": {"payload": payload}}))
+    event = parse_frame(
+        json.dumps({"event": "media", "streamSid": "MZ1", "media": {"payload": payload}})
+    )
     assert event.kind == "media"
     # 100 ms of 8 kHz mu-law becomes 100 ms of 16 kHz PCM16: 1600 samples, 3200 bytes.
     assert event.pcm is not None and len(event.pcm) == 3200
@@ -215,7 +217,10 @@ def test_a_bad_frame_is_invalid_rather_than_fatal():
     assert parse_frame("not json").kind == "invalid"
     assert parse_frame(json.dumps(["not", "an", "object"])).kind == "invalid"
     assert parse_frame(json.dumps({"no_event_key": 1})).kind == "invalid"
-    assert parse_frame(json.dumps({"event": "media", "media": {"payload": "!!!not base64!!!"}})).kind == "invalid"
+    assert (
+        parse_frame(json.dumps({"event": "media", "media": {"payload": "!!!not base64!!!"}})).kind
+        == "invalid"
+    )
     assert parse_frame(json.dumps({"event": "unheard_of"})).kind == "invalid"
     assert parse_frame(b"\xff\xfe binary junk").kind == "invalid"
     assert isinstance(parse_frame("not json"), SmartfloEvent)
@@ -382,7 +387,12 @@ def test_media_frame_envelopes_mulaw_unchanged():
 
 def test_mark_and_clear_frames_carry_stream_and_sequence():
     mark = json.loads(mark_frame("MZ1", "utt-2", 11))
-    assert mark == {"event": "mark", "streamSid": "MZ1", "sequenceNumber": "11", "mark": {"name": "utt-2"}}
+    assert mark == {
+        "event": "mark",
+        "streamSid": "MZ1",
+        "sequenceNumber": "11",
+        "mark": {"name": "utt-2"},
+    }
 
     clear = json.loads(clear_frame("MZ1", 12))
     assert clear == {"event": "clear", "streamSid": "MZ1", "sequenceNumber": "12"}
@@ -920,14 +930,19 @@ def test_handshake_accepts_a_get_with_query_parameters(smartflo_app):
 
 
 def test_handshake_mints_a_token_the_websocket_will_accept(smartflo_app):
-    body = smartflo_app.post(HANDSHAKE, params={"key": "hook-secret"}, json={"callId": "CA9"}).json()
+    body = smartflo_app.post(
+        HANDSHAKE, params={"key": "hook-secret"}, json={"callId": "CA9"}
+    ).json()
     token = body["wss_url"].split("token=", 1)[1]
     assert verify_call_token("hook-secret", token) == "CA9"
 
 
 def test_handshake_refuses_a_wrong_or_missing_secret(smartflo_app):
     assert smartflo_app.post(HANDSHAKE, json={"callId": "CA9"}).status_code == 401
-    assert smartflo_app.post(HANDSHAKE, params={"key": "wrong"}, json={"callId": "CA9"}).status_code == 401
+    assert (
+        smartflo_app.post(HANDSHAKE, params={"key": "wrong"}, json={"callId": "CA9"}).status_code
+        == 401
+    )
 
 
 def test_handshake_answers_well_inside_the_two_second_budget(smartflo_app):
@@ -1127,7 +1142,9 @@ def test_websocket_refuses_no_token(smartflo_app):
 
 def test_a_smartflo_call_greets_the_caller(smartflo_app):
     """The whole path: handshake, connect, start, and audio comes back."""
-    body = smartflo_app.post(HANDSHAKE, params={"key": "hook-secret"}, json={"callId": "CA9"}).json()
+    body = smartflo_app.post(
+        HANDSHAKE, params={"key": "hook-secret"}, json={"callId": "CA9"}
+    ).json()
     token = body["wss_url"].split("token=", 1)[1]
 
     with smartflo_app.websocket_connect(f"/ws/smartflo?token={token}") as ws:
@@ -1284,7 +1301,9 @@ Append to `tests/test_smartflo.py`:
 def test_talking_over_the_agent_puts_a_clear_on_the_wire(smartflo_app):
     """Barge-in on this carrier means `clear`: without it the audio Smartflo has
     already buffered keeps playing after the agent has been cut off."""
-    body = smartflo_app.post(HANDSHAKE, params={"key": "hook-secret"}, json={"callId": "CA9"}).json()
+    body = smartflo_app.post(
+        HANDSHAKE, params={"key": "hook-secret"}, json={"callId": "CA9"}
+    ).json()
     token = body["wss_url"].split("token=", 1)[1]
 
     # Real speech, not silence: the barge-in detector needs sustained voiced audio.

@@ -16,6 +16,14 @@ balancers and the Asterisk readiness GotoIf poll without credentials, and
 /api/telephony/announce, which is LAN-only like AudioSocket itself — a token
 there would only end up in the dialplan file in cleartext.
 
+Two more are exempt from this guard but not open: /api/telephony/smartflo/handshake
+and /ws/smartflo. Tata's servers reach them over the public internet and send no
+Authorization header, and the handshake's reply carries a WebSocket URL with a
+token in it, so leaving them merely open would disclose a credential. Each
+authenticates itself instead — a dedicated webhook secret on the handshake and
+a two-minute per-call token on the socket — neither of which is the admin token
+or unlocks anything else. See vaani/api/smartflo.py.
+
 Production never runs open. Boot refuses without a token, the settings API
 refuses a save that would clear it, and if the token is cleared anyway the
 guard serves nothing rather than everything.
@@ -35,7 +43,18 @@ from vaani.core.logging import get_logger
 
 log = get_logger(__name__)
 
-OPEN_PATHS = frozenset({"/api/health", "/api/ready", "/api/telephony/announce"})
+OPEN_PATHS = frozenset(
+    {
+        "/api/health",
+        "/api/ready",
+        "/api/telephony/announce",
+        # Both Smartflo paths carry their own, stronger authentication — a
+        # dedicated webhook secret and a two-minute per-call token — because the
+        # shared bearer token cannot travel on either. See vaani/api/smartflo.py.
+        "/api/telephony/smartflo/handshake",
+        "/ws/smartflo",
+    }
+)
 GUARDED_PREFIXES = ("/api/", "/ws/")
 
 
@@ -78,7 +97,7 @@ class TokenGuard:
             await self.app(scope, receive, send)
             return
 
-        settings = _settings(scope["app"])
+        settings = live_settings(scope["app"])
         expected = getattr(settings, "api_token", None) or None
         if not expected:
             if getattr(settings, "env", "dev") == "prod":
@@ -112,7 +131,9 @@ async def _refuse(scope: dict[str, Any], receive: Any, send: Any, status: int, w
         await send({"type": "websocket.close", "code": 4401 if status == 401 else 1013})
 
 
-def _settings(app: Any) -> Any:
+def live_settings(app: Any) -> Any:
+    """What the guard and the Smartflo endpoints both read: the settings as
+    saved on the admin page, falling back to what the app booted with."""
     state = app.state
     store = getattr(state, "settings_store", None)
     return store.settings if store is not None else getattr(state, "settings", None)

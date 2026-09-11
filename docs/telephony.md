@@ -15,6 +15,14 @@ caller's mobile ──▶ carrier (PSTN) ──▶ SIP trunk ──▶ Asterisk 
 No GPU is needed anywhere in this path. With hosted providers (Sarvam STT/TTS
 plus a hosted LLM), a 4-core VM runs Asterisk and Vaani side by side.
 
+There are now two routes onto the PSTN. Everything below through "When this
+outgrows Asterisk" is the self-hosted route just described: you own the SIP
+trunk and run Asterisk. **Tata Smartflo**, covered at the end of this
+document, is the hosted alternative — Tata runs the media servers and reaches
+Vaani over a plain WebSocket, no Asterisk box at all. A hosted pilot with no
+telephony infrastructure of its own wants Smartflo; an operator who already
+holds a SIP trunk, or needs carrier-grade scale later, wants Asterisk.
+
 ## What you need from a carrier
 
 Three things, for inbound:
@@ -167,3 +175,50 @@ a busy message rather than ringing out, add a `GotoIf` on
 For carrier-grade NAT traversal, geographic redundancy, or thousands of
 channels, put LiveKit (or another media server) in front and hand its PCM to
 the same `CallSession` — the transport is the only layer that changes.
+
+## Tata Smartflo (voice bot streaming)
+
+Smartflo is the hosted path: Tata holds the licence and runs the media servers
+in India, and Vaani is reached as a WebSocket bot endpoint. Asterisk is not
+involved. Audio is G.711 mu-law at 8 kHz, base64 inside JSON.
+
+No live Smartflo call has been made against this implementation — the wire
+format here comes from Tata's published documentation, and the test suite
+(`tests/test_smartflo.py`) exercises it against a fake client, not a real
+account. The steps below have not been run.
+
+### What Tata must do (they cannot be done from here)
+
+1. Enable **Channels Hub** on the account.
+2. Register the bot under **Settings → Channels → Voice Bot**: name, description,
+   and the dynamic endpoint URL below.
+3. For inbound, map the Voice Bot to a DID with **Configure Destination** in
+   **My Numbers**.
+
+Broadcast and outreach campaigns are not supported by Smartflo streaming, which
+suits the inbound-first plan.
+
+### What to configure here
+
+On `/settings`, under Telephony:
+
+| Setting | Value |
+|---|---|
+| Tata Smartflo voice bot | on |
+| Smartflo webhook secret | a long random string; also put it in the endpoint URL |
+| Smartflo public host | the public hostname, e.g. `voice.example.in` |
+| Smartflo agent profile | which agent answers |
+
+The dynamic endpoint URL given to Tata is:
+
+    https://<your host>/api/telephony/smartflo/handshake?key=<webhook secret>
+
+It answers with `{"success": true, "wss_url": "..."}` and nothing else — Smartflo
+refuses any extra key and drops the call — inside its 2000 ms budget.
+
+### Why the secret is not the API token
+
+That URL sits in Tata's configuration and its logs. The webhook secret grants
+only the ability to ask for a socket URL, and the per-call token in the reply is
+valid for two minutes and can open exactly one call. Neither can reach the
+settings API, the knowledge base, or a live call.
