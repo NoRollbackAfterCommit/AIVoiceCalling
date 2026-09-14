@@ -239,7 +239,22 @@ async def smartflo_stream(ws: WebSocket) -> None:
         await ws.close(code=1008)
         return
 
-    await ws.accept()
+    # A client that asks for a sub-protocol and is answered with none often hangs
+    # up at once, which is exactly what Tata's first live calls did: socket open
+    # and gone in the same second with `frame_counts: {}`. Echoing what was asked
+    # for is what the protocol expects and removes the possibility; recording what
+    # arrived means the next failure here names itself rather than needing another
+    # round of test calls to characterise.
+    requested = [p for p in (ws.scope.get("subprotocols") or []) if p]
+    log.info(
+        "smartflo stream connecting",
+        extra={
+            "token_call_id": call_ref,
+            "subprotocols": requested,
+            "user_agent": ws.headers.get("user-agent", ""),
+        },
+    )
+    await ws.accept(subprotocol=requested[0] if requested else None)
     transport = SmartfloTransport(ws.send_text)
 
     # Nothing to build until `start`: the caller's number and the stream id

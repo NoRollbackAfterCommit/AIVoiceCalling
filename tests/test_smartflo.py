@@ -945,6 +945,28 @@ def test_a_socket_that_leaves_before_start_says_so(smartflo_live):
     assert getattr(left, "frame_counts", None) == {"invalid": 1}
 
 
+def test_a_requested_subprotocol_is_echoed_back(smartflo_live):
+    """A client that asks for a sub-protocol and is answered with none may hang up.
+
+    Tata's live calls opened the socket and vanished in the same second having
+    sent nothing at all — `frame_counts: {}` — which is what a client does when
+    the negotiated sub-protocol is not the one it asked for. Echoing what was
+    requested costs nothing and removes the possibility.
+    """
+    token = _call_token(smartflo_live)
+    with smartflo_live.websocket_connect(
+        f"/ws/smartflo?token={token}", subprotocols=["audio.smartflo.tata"]
+    ) as ws:
+        assert ws.accepted_subprotocol == "audio.smartflo.tata"
+
+
+def test_no_subprotocol_requested_means_none_negotiated(smartflo_live):
+    """The ordinary case must not start claiming a protocol nobody asked for."""
+    token = _call_token(smartflo_live)
+    with smartflo_live.websocket_connect(f"/ws/smartflo?token={token}") as ws:
+        assert ws.accepted_subprotocol is None
+
+
 def test_a_start_without_a_stream_id_is_refused_loudly(smartflo_live):
     """No stream id means `send_audio` returns early for the whole call.
 
