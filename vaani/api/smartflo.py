@@ -245,6 +245,7 @@ async def smartflo_stream(ws: WebSocket) -> None:
     # Nothing to build until `start`: the caller's number and the stream id
     # arrive there, and no audio comes before it.
     tally = _FrameTally()
+    timed_out = False
     try:
         start = await asyncio.wait_for(_await_start(ws, tally), timeout=START_DEADLINE_S)
     except TimeoutError:
@@ -261,7 +262,18 @@ async def smartflo_stream(ws: WebSocket) -> None:
             },
         )
         start = None
+        timed_out = True
     if start is None:
+        if not timed_out:
+            # The peer left, or said `stop`, before `start`. Tata's first live
+            # call did exactly this and the deadline never fired, so the only
+            # trace was uvicorn's "connection open" and a caller hearing a ring
+            # then silence. Whether a carrier waits out the deadline or hangs up
+            # early says nothing about whether an operator needs to see it.
+            log.warning(
+                "smartflo stream ended without a start frame",
+                extra={"token_call_id": call_ref, "frame_counts": tally.snapshot()},
+            )
         await _close(ws)
         return
     if not start.stream_sid:

@@ -921,6 +921,30 @@ def test_a_socket_that_never_sends_start_is_closed_not_held(settings, monkeypatc
     assert getattr(warned, "token_call_id", None) == "CA-silent"
 
 
+def test_a_socket_that_leaves_before_start_says_so(smartflo_live):
+    """A carrier that hangs up before `start` must not close the log with it.
+
+    Regression for a real outage: Tata's first live call connected and went away
+    inside the deadline, so the timeout warning never fired and the only trace
+    left was uvicorn's "connection open". Whether the peer waits for the deadline
+    or leaves early decides nothing about the operator's need to see it.
+    """
+    token = _call_token(smartflo_live, "CA-earlyexit")
+    with _endpoint_log() as records:
+        with smartflo_live.websocket_connect(f"/ws/smartflo?token={token}") as ws:
+            # One frame the parser cannot place, then gone — the shape a carrier
+            # speaking a dialect we do not parse would leave behind.
+            ws.send_text(json.dumps({"event": "hello", "streamSid": "MZ1"}))
+
+    left = _wait_for_record(records, lambda r: "without" in r.getMessage())
+    assert left is not None, "a peer that leaves before start must say so in the log"
+    assert left.levelno >= logging.WARNING
+    assert getattr(left, "token_call_id", None) == "CA-earlyexit"
+    # What did arrive is the whole diagnosis: if `start` came in a shape the
+    # parser missed, this is the only place it shows up.
+    assert getattr(left, "frame_counts", None) == {"invalid": 1}
+
+
 def test_a_start_without_a_stream_id_is_refused_loudly(smartflo_live):
     """No stream id means `send_audio` returns early for the whole call.
 
