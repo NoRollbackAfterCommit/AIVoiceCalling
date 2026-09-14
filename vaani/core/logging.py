@@ -79,12 +79,19 @@ def configure_logging(level: str = "INFO") -> None:
         lg.propagate = True
 
 
-# `key=` as well as `token=`: Smartflo's handshake carries the webhook secret as
-# `?key=` on plain HTTP, by the carrier's convention, and that secret is also the
-# HMAC key that mints per-call tokens. Case-insensitive and matched anywhere in a
-# name (`apikey=`, `x-api-key=`): over-redacting a stray `key=` costs a log line
-# nothing; under-redacting a signing key hands out the ability to mint tokens.
-_TOKEN_IN_QUERY = re.compile(r"((?:access_|api_)?token=|key=)[^&\s\"']+", re.IGNORECASE)
+# Redact by what a parameter carries, not by the exact name it arrives under.
+# Smartflo's handshake is documented as `?key=`, but the name is configured in
+# their dashboard, and a request that named it `secret` instead wrote the live
+# webhook secret — the HMAC key that mints per-call tokens — to the container log
+# in full. Matched anywhere in a name (`apikey=`, `x-api-key=`, `webhook_secret=`)
+# and case-insensitively: over-redacting a harmless `key=` costs a log line
+# nothing, while under-redacting a signing key hands out the ability to mint
+# tokens. Anything genuinely new still has to be added here, so the list errs
+# wide.
+_TOKEN_IN_QUERY = re.compile(
+    r"((?:token|key|secret|password|passwd|pwd|credential|auth|sig|signature)=)[^&\s\"']+",
+    re.IGNORECASE,
+)
 
 
 class _RedactQueryTokens(logging.Filter):

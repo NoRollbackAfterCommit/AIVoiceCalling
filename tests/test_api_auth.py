@@ -261,3 +261,25 @@ def test_the_log_stream_redacts_the_websocket_token():
     out = stream.getvalue()
     assert TOKEN not in out
     assert "token=***" in out, "the rest of the line survives"
+
+
+def test_the_log_stream_redacts_a_secret_named_anything_a_carrier_might_use():
+    """A credential is redacted by what it is, not by the name it arrives under.
+
+    Smartflo's handshake is documented as `?key=`, but the name is set in their
+    dashboard and a mistyped or differently-named parameter still carries the
+    real webhook secret — which is the HMAC key that mints per-call tokens. One
+    such request wrote it to the container log in full.
+    """
+    configure_logging("INFO")
+    stream = io.StringIO()
+    logging.getLogger().handlers[0].setStream(stream)
+
+    for name in ("secret", "webhook_secret", "apikey", "x-api-key", "password", "sig"):
+        logging.getLogger("uvicorn.access").info(
+            '%s - "%s %s HTTP/%s" %d', "10.0.0.1:1", "POST", f"/api/x?{name}={TOKEN}", "1.1", 401
+        )
+
+    out = stream.getvalue()
+    assert TOKEN not in out, "a credential reached the log under one of these names"
+    assert out.count("***") == 6, "each line keeps its shape, with the value replaced"
