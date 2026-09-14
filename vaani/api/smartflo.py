@@ -287,7 +287,12 @@ async def smartflo_stream(ws: WebSocket) -> None:
             # early says nothing about whether an operator needs to see it.
             log.warning(
                 "smartflo stream ended without a start frame",
-                extra={"token_call_id": call_ref, "frame_counts": tally.snapshot()},
+                extra={
+                    "token_call_id": call_ref,
+                    "frame_counts": tally.snapshot(),
+                    "close_code": tally.close_code,
+                    "close_reason": tally.close_reason,
+                },
             )
         await _close(ws)
         return
@@ -370,11 +375,20 @@ class _FrameTally:
     lines for that one call — so the first is described and the rest are counted.
     """
 
-    __slots__ = ("_described", "counts")
+    __slots__ = ("_described", "close_code", "close_reason", "counts")
 
     def __init__(self) -> None:
         self.counts: dict[str, int] = {}
         self._described = False
+        # How the peer left. When it sends nothing at all this is the only
+        # evidence there is, and 1002 (protocol objection), 1008 (policy) and
+        # 1000 (ordinary goodbye) each point somewhere completely different.
+        self.close_code: int | None = None
+        self.close_reason: str | None = None
+
+    def note_close(self, code: int | None, reason: str | None) -> None:
+        self.close_code = code
+        self.close_reason = reason or None
 
     def note(self, kind: str, raw: str | bytes) -> None:
         self.counts[kind] = self.counts.get(kind, 0) + 1
@@ -426,7 +440,7 @@ def _preview(raw: str | bytes) -> str:
 
 async def _await_start(ws: WebSocket, tally: _FrameTally) -> SmartfloEvent | None:
     """The `start` frame, or None if the socket ends before one arrives."""
-    while (raw := await _next_frame(ws)) is not None:
+    while (raw := await _next_frame(ws, tally)) is not None:
         event = parse_frame(raw)
         if event.kind == "start":
             return event
@@ -444,7 +458,7 @@ async def _read(
 ) -> None:
     """Feeds the session until Smartflo sends `stop` or drops the socket."""
     try:
-        while (raw := await _next_frame(ws)) is not None:
+        while (raw := await _next_frame(ws, tally)) is not None:
             event = parse_frame(raw)
             if event.kind == "media" and event.pcm:
                 await session.push_audio(event.pcm)
@@ -464,7 +478,7 @@ async def _read(
         tally.report()
 
 
-async def _next_frame(ws: WebSocket) -> str | bytes | None:
+async def _next_frame(ws: WebSocket, tally: _FrameTally | None = None) -> str | bytes | None:
     """The next frame, or None once the peer is gone.
 
     Smartflo promises text. A stray binary frame is still not a reason to end a
@@ -474,13 +488,19 @@ async def _next_frame(ws: WebSocket) -> str | bytes | None:
         while True:
             message = await ws.receive()
             if message["type"] == "websocket.disconnect":
+                if tally is not None:
+                    tally.note_close(message.get("code"), message.get("reason"))
                 return None
             if (text := message.get("text")) is not None:
                 return text
             if (data := message.get("bytes")) is not None:
                 return data
-    except (WebSocketDisconnect, RuntimeError):
-        # RuntimeError is receive() after the socket has closed, as in /ws/call.
+    except WebSocketDisconnect as exc:
+        if tally is not None:
+            tally.note_close(exc.code, getattr(exc, "reason", None))
+        return None
+    except RuntimeError:
+        # receive() after the socket has closed, as in /ws/call.
         return None
 
 

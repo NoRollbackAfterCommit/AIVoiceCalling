@@ -945,6 +945,25 @@ def test_a_socket_that_leaves_before_start_says_so(smartflo_live):
     assert getattr(left, "frame_counts", None) == {"invalid": 1}
 
 
+def test_the_close_code_a_carrier_hangs_up_with_is_recorded(smartflo_live):
+    """Why the peer left is the whole diagnosis when it sends nothing.
+
+    Tata's calls connect and close in the same second with `frame_counts: {}`.
+    Without the close code there is no way to tell a protocol objection (1002)
+    from a policy refusal (1008) from an ordinary goodbye (1000), and each of
+    those points somewhere completely different.
+    """
+    token = _call_token(smartflo_live, "CA-closecode")
+    with _endpoint_log() as records:
+        with smartflo_live.websocket_connect(f"/ws/smartflo?token={token}") as ws:
+            ws.close(code=1002, reason="protocol error")
+
+    left = _wait_for_record(records, lambda r: "without" in r.getMessage())
+    assert left is not None, "a peer that leaves before start must say so"
+    assert getattr(left, "close_code", None) == 1002
+    assert getattr(left, "close_reason", None) == "protocol error"
+
+
 def test_a_requested_subprotocol_is_echoed_back(smartflo_live):
     """A client that asks for a sub-protocol and is answered with none may hang up.
 
