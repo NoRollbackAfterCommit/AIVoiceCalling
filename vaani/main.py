@@ -187,6 +187,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         async def knowledge_page() -> FileResponse:
             return FileResponse(str(static_dir / "knowledge.html"))
 
+        @app.get("/calls", include_in_schema=False)
+        async def calls_page() -> FileResponse:
+            return FileResponse(str(static_dir / "calls.html"))
+
     return app
 
 

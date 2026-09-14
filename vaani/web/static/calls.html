@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Vaani — Live Calls</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --line: #30363d;
+    --fg: #e6edf3; --dim: #8b949e;
+    --accent: #2f81f7; --ok: #3fb950; --warn: #d29922; --err: #f85149;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f6f8fa; --panel:#fff; --line:#d8dee4; --fg:#1f2328; --dim:#656d76; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    padding: 16px 24px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  }
+  h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  .tag {
+    font-size: 12px; color: var(--dim); border: 1px solid var(--line);
+    padding: 2px 8px; border-radius: 999px; font-variant-numeric: tabular-nums;
+  }
+  header a { color: var(--accent); text-decoration: none; font-size: 13px; }
+  main { display: grid; grid-template-columns: 360px 1fr; gap: 20px; padding: 20px 24px; }
+  @media (max-width: 920px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .panel + .panel { margin-top: 20px; }
+  .panel h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--dim); margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 8px;
+  }
+  /* The call id lives here, and the heading's uppercasing would corrupt what an
+     operator copies out of it into a log search. */
+  .panel h2 .count {
+    margin-left: auto; font-variant-numeric: tabular-nums; text-transform: none;
+  }
+  .note { font-size: 12px; color: var(--dim); padding: 14px 16px; margin: 0; }
+
+  /* -- roster ---------------------------------------------------------- */
+  #roster { max-height: 46vh; overflow-y: auto; }
+  .call {
+    width: 100%; text-align: left; font: inherit; cursor: pointer;
+    display: grid; grid-template-columns: auto 1fr auto; gap: 4px 10px;
+    align-items: center; padding: 11px 16px;
+    background: none; border: 0; border-bottom: 1px solid var(--line);
+    border-left: 3px solid transparent; color: var(--fg);
+  }
+  .call:hover { background: var(--bg); }
+  .call[aria-selected="true"] { border-left-color: var(--accent); background: var(--bg); }
+  .call .who { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; }
+  .call .age { font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .call .preview {
+    grid-column: 2 / -1; font-size: 12px; color: var(--dim);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--dim); flex: none; }
+  .dot.greeting  { background: var(--ok); animation: pulse 1s infinite; }
+  .dot.listening { background: var(--accent); animation: pulse 1.6s infinite; }
+  .dot.thinking  { background: var(--warn); animation: pulse .8s infinite; }
+  .dot.speaking  { background: var(--ok); animation: pulse 1s infinite; }
+  .dot.transferring { background: var(--warn); }
+  .dot.ended     { background: var(--err); }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .3 } }
+  @media (prefers-reduced-motion: reduce) { .dot { animation: none !important; } }
+  .state { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; }
+
+  /* -- detail ---------------------------------------------------------- */
+  #detailHead {
+    padding: 12px 16px; border-bottom: 1px solid var(--line);
+    display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
+    font-size: 13px; color: var(--dim); font-variant-numeric: tabular-nums;
+  }
+  #detailHead b { color: var(--fg); font-variant-numeric: normal; }
+  #log { height: 58vh; min-height: 320px; overflow-y: auto; padding: 16px; }
+  .msg { margin-bottom: 14px; display: flex; gap: 10px; }
+  .who-col {
+    flex: 0 0 62px; font-size: 11px; text-transform: uppercase;
+    letter-spacing: .05em; color: var(--dim); padding-top: 3px;
+  }
+  .msg.caller .who-col { color: var(--accent); }
+  .msg.agent .who-col { color: var(--ok); }
+  .msg.sys { font-size: 13px; color: var(--dim); }
+  .body { flex: 1; white-space: pre-wrap; word-break: break-word; }
+  .meta { font-size: 12px; color: var(--dim); margin-top: 3px; font-variant-numeric: tabular-nums; }
+  .meta .bad { color: var(--warn); }
+  .controls { padding: 14px 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  button {
+    font: inherit; font-weight: 600; padding: 9px 18px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--fg); cursor: pointer;
+  }
+  button.danger { background: var(--err); border-color: var(--err); color: #fff; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #recent { max-height: 34vh; overflow-y: auto; }
+</style>
+<script src="/static/auth.js"></script>
+</head>
+<body>
+<header>
+  <h1>Vaani</h1>
+  <span class="tag">live calls</span>
+  <span class="state"><span class="dot" id="feedDot"></span><span id="feedText">connecting…</span></span>
+  <span class="tag" id="lines">— / — lines</span>
+  <a href="/" style="margin-left:auto">← Console</a>
+  <a href="/knowledge" style="margin-left:14px">Knowledge →</a>
+  <a href="/settings" style="margin-left:14px">Settings →</a>
+</header>
+
+<main>
+  <div>
+    <div class="panel">
+      <h2>In progress <span class="count" id="liveCount"></span></h2>
+      <div id="roster"></div>
+      <p class="note" id="rosterEmpty">No calls in progress.</p>
+    </div>
+    <div class="panel">
+      <h2>Recent</h2>
+      <div id="recent"></div>
+      <p class="note" id="recentEmpty">No calls recorded yet.</p>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Call detail <span class="count" id="detailId"></span></h2>
+    <div id="detailHead"><span>Select a call to watch it.</span></div>
+    <div id="log"></div>
+    <div class="controls">
+      <button class="danger" id="hangup" disabled>Hang up</button>
+      <span class="note" style="padding:0" id="hangupNote"></span>
+    </div>
+  </div>
+</main>
+
+<script>
+"use strict";
+
+// A supervisor watching fifty lines cannot render fifty transcripts: the tab
+// stops responding long before the calls do. So the roster is driven by the
+// snapshot alone, and only the selected call's events are turned into DOM.
+var MAX_MESSAGES = 200;      // per call; a long call must not grow without limit
+var RECENT_EVERY_MS = 30000;
+var RECONNECT_MAX_MS = 15000;
+
+var calls = new Map();       // call_id -> view model
+var selected = null;
+var capacity = 0;
+var ws = null;
+var backoff = 500;
+var triedToken = null;      // which token the open socket was built with
+var rosterDirty = false, detailDirty = false, recentDirty = false;
+var recentRows = [];
+
+function el(id) { return document.getElementById(id); }
+
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
+
+function secs(n) {
+  n = Math.max(0, Math.round(Number(n) || 0));
+  var m = Math.floor(n / 60);
+  return m + ":" + String(n % 60).padStart(2, "0");
+}
+
+function model(id) {
+  var c = calls.get(id);
+  if (!c) {
+    c = { call_id: id, state: "", messages: [], preview: "", live: true, stored: false };
+    calls.set(id, c);
+  }
+  return c;
+}
+
+// Both renders are coalesced into one frame. A busy switchboard can deliver
+// dozens of events between paints, and re-rendering per event is what makes a
+// dashboard feel slower than the calls it is watching.
+function paint() {
+  if (rosterDirty) { rosterDirty = false; drawRoster(); drawRecent(); }
+  if (recentDirty) { recentDirty = false; drawRecent(); }
+  if (detailDirty) { detailDirty = false; drawDetail(); }
+}
+function markRoster() { if (!rosterDirty) { rosterDirty = true; requestAnimationFrame(paint); } }
+function markRecent() { if (!recentDirty) { recentDirty = true; requestAnimationFrame(paint); } }
+function markDetail() { if (!detailDirty) { detailDirty = true; requestAnimationFrame(paint); } }
+
+/* -- the feed ---------------------------------------------------------- */
+
+function connect() {
+  // On a guarded server the first load races the token prompt: the socket is
+  // refused, and without this the reader then waits out a backoff that has
+  // nothing left to wait for. Remembering which token was tried lets a newly
+  // entered one reconnect at once.
+  triedToken = vaaniAuth.token();
+  ws = new WebSocket(vaaniAuth.wsUrl("/ws/monitor"));
+
+  ws.onopen = function () {
+    backoff = 500;
+    feed("listening", "live");
+  };
+
+  ws.onmessage = function (e) {
+    var msg;
+    try { msg = JSON.parse(e.data); } catch (err) { return; }
+    if (msg.type === "snapshot") onSnapshot(msg);
+    else if (msg.type === "event") onEvent(msg.event || {});
+    else if (msg.type === "error") feed("ended", msg.message || "unavailable");
+  };
+
+  ws.onclose = function () {
+    feed("ended", "reconnecting…");
+    var wait = vaaniAuth.token() !== triedToken ? 0 : backoff;
+    setTimeout(connect, wait);
+    backoff = wait === 0 ? 500 : Math.min(backoff * 2, RECONNECT_MAX_MS);
+  };
+}
+
+function feed(state, text) {
+  el("feedDot").className = "dot " + state;
+  el("feedText").textContent = text;
+}
+
+function onSnapshot(msg) {
+  capacity = msg.capacity || capacity;
+  var seen = new Set();
+
+  (msg.calls || []).forEach(function (row) {
+    var c = model(row.call_id);
+    seen.add(row.call_id);
+    c.live = true;
+    c.stored = false;
+    // The snapshot is authoritative for everything it carries: a dropped event
+    // leaves the roster stale, and this is what corrects it.
+    c.state = row.state || c.state;
+    c.caller_number = row.caller_number;
+    c.agent_key = row.agent_key;
+    c.direction = row.direction;
+    c.duration_s = row.duration_s;
+    c.turns = row.turns;
+  });
+
+  // A call that has left the roster has ended. Keep it in the map so the pane
+  // of whoever is reading it does not empty out mid-sentence.
+  calls.forEach(function (c) {
+    if (c.live && !seen.has(c.call_id)) { c.live = false; c.state = "ended"; }
+  });
+
+  el("lines").textContent = seen.size + " / " + (capacity || "—") + " lines";
+  el("liveCount").textContent = seen.size ? String(seen.size) : "";
+  markRoster();
+  if (selected && calls.has(selected)) markDetail();
+}
+
+function onEvent(ev) {
+  var id = ev.call_id;
+  if (!id) return;
+  var c = model(id);
+
+  switch (ev.type) {
+    case "state":
+      c.state = ev.state;
+      break;
+    case "language":
+      c.language = ev.language;
+      push(c, "sys", "Language set to " + ev.language);
+      break;
+    case "transcript":
+      push(c, ev.role === "caller" ? "caller" : "agent", ev.text);
+      c.preview = (ev.role === "caller" ? "▸ " : "◂ ") + (ev.text || "");
+      break;
+    case "speech":
+      // A reply already arrived as a transcript event just before this one;
+      // only the scripted lines (greeting, language confirmation) reach the
+      // caller without one, and those would otherwise never be shown.
+      if (ev.kind && ev.kind !== "reply") push(c, "agent", ev.text);
+      break;
+    case "retrieval":
+      push(c, "sys", "Retrieved for “" + (ev.query || "") + "”: " +
+        ((ev.sources || []).join(", ") || "nothing"));
+      break;
+    case "metrics":
+      attachMetrics(c, ev);
+      break;
+    case "barge_in":
+      push(c, "sys", "Caller interrupted");
+      break;
+    case "dtmf":
+      push(c, "sys", "Keypad: " + ev.digit);
+      break;
+    case "call_end":
+      c.live = false;
+      c.state = "ended";
+      if (ev.record) { c.outcome = ev.record.outcome; c.duration_s = ev.record.duration_s; }
+      push(c, "sys", "Call ended — " + (c.outcome || "ended"));
+      break;
+  }
+
+  markRoster();
+  if (id === selected) markDetail();
+}
+
+function push(c, role, text) {
+  if (!text) return;
+  c.messages.push({ role: role, text: text });
+  if (c.messages.length > MAX_MESSAGES) c.messages.shift();
+}
+
+function attachMetrics(c, m) {
+  // Hang the timings on the agent turn they describe. total_ms measures the
+  // whole turn including the reply being spoken at real time, so the figure a
+  // caller actually waits for is the other three added up — showing total
+  // alone reads as latency it is not.
+  for (var i = c.messages.length - 1; i >= 0; i--) {
+    if (c.messages[i].role === "agent") { c.messages[i].metrics = m; return; }
+  }
+}
+
+/* -- rendering --------------------------------------------------------- */
+
+function drawRoster() {
+  var live = [];
+  calls.forEach(function (c) { if (c.live) live.push(c); });
+  // Longest-running first, so tiles do not reshuffle under the pointer as
+  // durations tick over.
+  live.sort(function (a, b) { return (b.duration_s || 0) - (a.duration_s || 0); });
+
+  el("rosterEmpty").hidden = live.length > 0;
+  el("roster").innerHTML = live.map(function (c) {
+    return '<button class="call" role="option" aria-selected="' + (c.call_id === selected) +
+      '" data-id="' + esc(c.call_id) + '">' +
+      '<span class="dot ' + esc(c.state || "") + '"></span>' +
+      '<span class="who">' + esc(c.caller_number || "unknown caller") + '</span>' +
+      '<span class="age">' + secs(c.duration_s) + "</span>" +
+      '<span class="preview">' + esc(c.preview || (c.agent_key || "")) + "</span>" +
+      "</button>";
+  }).join("");
+}
+
+function drawDetail() {
+  var c = selected ? calls.get(selected) : null;
+  el("detailId").textContent = c ? c.call_id : "";
+
+  if (!c) {
+    el("detailHead").innerHTML = "<span>Select a call to watch it.</span>";
+    el("log").innerHTML = "";
+    el("hangup").disabled = true;
+    return;
+  }
+
+  el("detailHead").innerHTML = [
+    '<span class="state"><span class="dot ' + esc(c.state || "") + '"></span>' +
+      esc(c.state || (c.stored ? "stored" : "—")) + "</span>",
+    "<span>from <b>" + esc(c.caller_number || "unknown") + "</b></span>",
+    "<span>agent <b>" + esc(c.agent_key || "—") + "</b></span>",
+    c.language ? "<span>language <b>" + esc(c.language) + "</b></span>" : "",
+    "<span>" + secs(c.duration_s) + "</span>",
+    c.outcome ? "<span>outcome <b>" + esc(c.outcome) + "</b></span>" : ""
+  ].join("");
+
+  var log = el("log");
+  var atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+
+  log.innerHTML = c.messages.map(function (m) {
+    var who = m.role === "sys" ? "" : m.role;
+    var meta = m.metrics ? metricsLine(m.metrics) : "";
+    return '<div class="msg ' + m.role + '">' +
+      (m.role === "sys" ? "" : '<span class="who-col">' + esc(who) + "</span>") +
+      '<span class="body">' + esc(m.text) + meta + "</span></div>";
+  }).join("");
+
+  // Only follow the tail if the reader was already at it — yanking the view
+  // back down while someone is reading an earlier turn is worse than useless.
+  if (atBottom) log.scrollTop = log.scrollHeight;
+
+  el("hangup").disabled = !c.live;
+  el("hangupNote").textContent = c.live ? "" : "This call has ended.";
+}
+
+function metricsLine(m) {
+  var wait = (m.stt_ms || 0) + (m.agent_ms || 0) + (m.tts_first_chunk_ms || 0);
+  var spoken = Math.max(0, (m.total_ms || 0) - wait);
+  var parts = [
+    "waited " + (wait / 1000).toFixed(1) + "s",
+    "stt " + (m.stt_ms || 0) + " · think " + (m.agent_ms || 0) +
+      " · voice " + (m.tts_first_chunk_ms || 0) + " ms",
+    "spoke " + (spoken / 1000).toFixed(1) + "s"
+  ];
+  var line = '<div class="meta">' + parts.join(" — ");
+  if (m.barged_in) line += ' <span class="bad">· interrupted</span>';
+  return line + "</div>";
+}
+
+/* -- recent calls ------------------------------------------------------ */
+
+function loadRecent() {
+  fetch("/api/calls?limit=25").then(function (r) {
+    return r.ok ? r.json() : [];
+  }).then(function (rows) {
+    recentRows = Array.isArray(rows) ? rows : [];
+    markRecent();
+  }).catch(function () { /* a failed poll must not break the live feed */ });
+}
+
+function drawRecent() {
+  // Filtered at paint, not at fetch: the list is fetched every thirty seconds
+  // but the roster changes constantly, and a call still in progress is already
+  // a live tile above. Listing it again as a finished call is a lie.
+  var rows = recentRows.filter(function (r) {
+    var c = calls.get(r.call_id);
+    return !(c && c.live);
+  });
+  el("recent").innerHTML = rows.map(function (r) {
+      return '<button class="call" data-stored="' + esc(r.call_id) + '">' +
+        '<span class="dot ' + (r.outcome === "completed" || r.outcome === "caller_ended"
+          ? "" : "ended") + '"></span>' +
+        '<span class="who">' + esc(r.caller_number || "unknown caller") + "</span>" +
+        '<span class="age">' + secs(r.duration_s) + "</span>" +
+        '<span class="preview">' + esc(r.outcome || "") + " · " +
+          esc(new Date((r.started_at || 0) * 1000).toLocaleString()) + "</span>" +
+        "</button>";
+  }).join("");
+  el("recentEmpty").hidden = rows.length > 0;
+}
+
+function openStored(id) {
+  fetch("/api/calls/" + encodeURIComponent(id)).then(function (r) {
+    if (!r.ok) throw new Error(String(r.status));
+    return r.json();
+  }).then(function (row) {
+    var c = model(id);
+    c.live = false;
+    c.stored = true;
+    c.state = "";
+    c.caller_number = row.caller_number;
+    c.agent_key = row.agent_key;
+    c.language = row.language;
+    c.duration_s = row.duration_s;
+    c.outcome = row.outcome;
+    c.messages = storedMessages(row.turns);
+    selected = id;
+    markRoster();
+    markDetail();
+  }).catch(function () {
+    el("log").innerHTML = '<p class="note">That call could not be loaded.</p>';
+  });
+}
+
+/* -- interaction ------------------------------------------------------- */
+
+document.addEventListener("click", function (e) {
+  var tile = e.target.closest ? e.target.closest(".call") : null;
+  if (!tile) return;
+  if (tile.dataset.stored) { openStored(tile.dataset.stored); return; }
+  if (tile.dataset.id) {
+    selected = tile.dataset.id;
+    backfill(selected);
+    markRoster();
+    markDetail();
+  }
+});
+
+function backfill(id) {
+  // The feed only carries what happened since this tab connected, so opening a
+  // call that started ten minutes ago shows an empty pane until its next turn.
+  // Turns are written to the database as they complete, so the earlier ones can
+  // be fetched — once per call, and only while nothing has arrived live, so a
+  // slow response cannot duplicate what the socket has since delivered.
+  var c = model(id);
+  if (c.backfilled || c.messages.length) return;
+  c.backfilled = true;
+  fetch("/api/calls/" + encodeURIComponent(id)).then(function (r) {
+    return r.ok ? r.json() : null;
+  }).then(function (row) {
+    if (!row || c.messages.length) return;
+    c.messages = storedMessages(row.turns);
+    if (id === selected) markDetail();
+  }).catch(function () { /* a live call with no history is not an error */ });
+}
+
+function storedMessages(turns) {
+  return (turns || []).filter(function (t) { return t.text; }).map(function (t) {
+    var m = { role: t.role === "caller" ? "caller" : "agent", text: t.text };
+    if (t.role === "agent" && t.total_ms) m.metrics = t;
+    return m;
+  });
+}
+
+el("hangup").addEventListener("click", function () {
+  var c = selected ? calls.get(selected) : null;
+  if (!c || !c.live) return;
+  // A live caller is on the other end of this button.
+  if (!window.confirm("Hang up the call from " + (c.caller_number || "this caller") + "?")) return;
+
+  el("hangup").disabled = true;
+  fetch("/api/calls/" + encodeURIComponent(c.call_id) + "/hangup", { method: "POST" })
+    .then(function (r) {
+      if (!r.ok) throw new Error(String(r.status));
+      el("hangupNote").textContent = "Hang-up sent.";
+    })
+    .catch(function () {
+      el("hangupNote").textContent = "Hang-up failed — the call may have already ended.";
+      el("hangup").disabled = false;
+    });
+});
+
+// Durations come from the snapshot, but it only arrives every couple of
+// seconds; ticking locally keeps the roster from looking frozen.
+setInterval(function () {
+  calls.forEach(function (c) { if (c.live && c.duration_s != null) c.duration_s += 1; });
+  markRoster();
+  if (selected) markDetail();
+}, 1000);
+
+setInterval(loadRecent, RECENT_EVERY_MS);
+loadRecent();
+connect();
+</script>
+</body>
+</html>
