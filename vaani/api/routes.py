@@ -272,6 +272,16 @@ async def get_call(call_id: str, request: Request) -> dict[str, Any]:
     for record in manager.history(500):
         if record["call_id"] == call_id:
             return record
+    # Memory holds only what this process handled, which is why the history
+    # endpoint above reads the database. This one must too, or every call that
+    # endpoint lists answers 404 after a restart — and the per-turn metrics,
+    # which is where the latency figures live, become unreachable entirely.
+    repository = request.app.state.services.calls
+    if repository is not None:
+        stored = await repository.get_call(call_id)
+        if stored is not None:
+            stored["turns"] = await repository.turns_for(call_id)
+            return stored
     raise HTTPException(404, f"No call {call_id!r}")
 
 

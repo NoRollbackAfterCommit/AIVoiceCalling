@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
+from vaani.api.routes import get_call
 from vaani.config import Settings
 from vaani.core.registry import build_services
 from vaani.db.repository import CallRepository
@@ -89,6 +92,53 @@ async def test_the_record_survives_a_restart(tmp_path, services_with_db):
     finally:
         await reopened.close()
     svc.calls = reopened  # so the fixture teardown closes something valid
+
+
+class _ForgetfulManager:
+    """A call manager with no memory of the call, as after any restart."""
+
+    def get(self, call_id: str) -> None:
+        return None
+
+    def history(self, limit: int) -> list:
+        return []
+
+
+def _request(manager, repository) -> SimpleNamespace:
+    state = SimpleNamespace(calls=manager, services=SimpleNamespace(calls=repository))
+    return SimpleNamespace(app=SimpleNamespace(state=state))
+
+
+async def test_a_stored_call_is_readable_once_the_process_has_forgotten_it(services_with_db):
+    """`GET /api/calls/{id}` must fall through to the database.
+
+    The history endpoint above it already reads the repository, for the reason
+    written in its own docstring: the in-memory manager only knows the calls
+    this process handled, which is not an audit trail. The detail endpoint read
+    memory alone, so every call the list showed came back 404 after a restart —
+    and per-turn latency metrics, which live on the turns, were unreachable.
+    """
+    svc = services_with_db
+    session = CallSession(transport=FakeTransport(), services=svc, agent_key="default")
+    await _run_one_turn(session)
+
+    record = await get_call(session.call_id, _request(_ForgetfulManager(), svc.calls))
+
+    assert record["call_id"] == session.call_id
+    assert record["outcome"] == "completed"
+    assert record["turns"], "the stored turns must come back with the call"
+    assert {t["role"] for t in record["turns"]} == {"caller", "agent"}
+    # The timings are the point: latency work cannot read what the API drops.
+    # They are flat columns on the turn, not a nested metrics dict.
+    first = record["turns"][0]
+    assert {"stt_ms", "agent_ms", "tts_first_chunk_ms", "total_ms"} <= set(first)
+    assert isinstance(first["total_ms"], int)
+
+
+async def test_a_call_nobody_has_ever_seen_is_still_a_404(services_with_db):
+    with pytest.raises(HTTPException) as caught:
+        await get_call("no-such-call", _request(_ForgetfulManager(), services_with_db.calls))
+    assert caught.value.status_code == 404
 
 
 async def test_sessions_run_fine_without_a_repository():
