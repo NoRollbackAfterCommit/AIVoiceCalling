@@ -160,7 +160,6 @@ var selected = null;
 var capacity = 0;
 var ws = null;
 var backoff = 500;
-var triedToken = null;      // which token the open socket was built with
 var rosterDirty = false, detailDirty = false, recentDirty = false;
 var recentRows = [];
 
@@ -202,11 +201,9 @@ function markDetail() { if (!detailDirty) { detailDirty = true; requestAnimation
 /* -- the feed ---------------------------------------------------------- */
 
 function connect() {
-  // On a guarded server the first load races the token prompt: the socket is
-  // refused, and without this the reader then waits out a backoff that has
-  // nothing left to wait for. Remembering which token was tried lets a newly
-  // entered one reconnect at once.
-  triedToken = vaaniAuth.token();
+  // The session cookie rides on the handshake by itself, so there is nothing to
+  // attach here. A socket refused for want of one means the session has gone,
+  // and the reconnect below is what notices.
   ws = new WebSocket(vaaniAuth.wsUrl("/ws/monitor"));
 
   ws.onopen = function () {
@@ -224,9 +221,13 @@ function connect() {
 
   ws.onclose = function () {
     feed("ended", "reconnecting…");
-    var wait = vaaniAuth.token() !== triedToken ? 0 : backoff;
-    setTimeout(connect, wait);
-    backoff = wait === 0 ? 500 : Math.min(backoff * 2, RECONNECT_MAX_MS);
+    setTimeout(connect, backoff);
+    backoff = Math.min(backoff * 2, RECONNECT_MAX_MS);
+    // A socket that will not open because the session expired would otherwise
+    // retry quietly for ever; confirm who we are and let auth.js redirect.
+    window.vaaniAuth.me().then(function (user) {
+      if (!user) window.fetch("/api/calls/live", { credentials: "same-origin" });
+    });
   };
 }
 

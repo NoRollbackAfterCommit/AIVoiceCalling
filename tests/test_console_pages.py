@@ -59,3 +59,49 @@ async def test_the_live_call_page_reads_the_monitor_socket(services, settings):
     assert "/ws/monitor" in page, "the page must subscribe to the supervisor feed"
     assert "vaaniAuth.wsUrl" in page, "the socket must carry the token the guard requires"
     assert "/api/calls/" in page, "hang-up and stored detail both go through /api/calls"
+
+
+# -- the console signs in; it does not hold the master key -------------------
+
+
+def _auth_js() -> str:
+    from pathlib import Path
+
+    import vaani
+
+    return (Path(vaani.__file__).parent / "web" / "static" / "auth.js").read_text(encoding="utf-8")
+
+
+def test_the_console_never_attaches_the_shared_api_token():
+    """The token is a machine credential — the deploy script, the health probe,
+    the carrier harness. A browser holding one bypassed the sign-in screen
+    entirely: writes succeeded while `/api/auth/me` said nobody was signed in,
+    so pages rendered blank lists over a session that did not exist, and data
+    could be fed in without anyone logging in.
+
+    People carry a session cookie, which the browser attaches by itself.
+    """
+    source = _auth_js()
+    assert "Authorization" not in source, "the console is still sending the shared token"
+    assert "token=" not in source, "the console is still putting a token on the socket URL"
+
+
+def test_the_console_discards_any_token_it_finds_stored():
+    """A browser that was given one before this change must stop using it,
+    without anybody having to clear their site data."""
+    source = _auth_js()
+    assert "removeItem" in source
+
+
+def test_every_console_page_loads_the_auth_helper():
+    """A page that forgets it has no sign-out control, no role-aware menu, and
+    no way to notice the session has gone."""
+    from pathlib import Path
+
+    import vaani
+
+    static = Path(vaani.__file__).parent / "web" / "static"
+    for page in static.glob("*.html"):
+        if page.name == "login.html":
+            continue  # the one page that must work without a session
+        assert "/static/auth.js" in page.read_text(encoding="utf-8"), page.name
