@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Vaani — Organisations</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --line: #30363d;
+    --fg: #e6edf3; --dim: #8b949e;
+    --accent: #2f81f7; --ok: #3fb950; --warn: #d29922; --err: #f85149;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f6f8fa; --panel:#fff; --line:#d8dee4; --fg:#1f2328; --dim:#656d76; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    padding: 16px 24px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  }
+  h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  .tag {
+    font-size: 12px; color: var(--dim); border: 1px solid var(--line);
+    padding: 2px 8px; border-radius: 999px;
+  }
+  header a { color: var(--accent); text-decoration: none; font-size: 13px; }
+  main { display: grid; grid-template-columns: 380px 1fr; gap: 20px; padding: 20px 24px; }
+  @media (max-width: 960px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .panel + .panel { margin-top: 20px; }
+  .panel h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--dim); margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--line);
+  }
+  .note { font-size: 12px; color: var(--dim); padding: 14px 16px; margin: 0; }
+  .row {
+    padding: 11px 16px; border-bottom: 1px solid var(--line);
+    display: flex; gap: 10px; align-items: center;
+  }
+  .row .grow { flex: 1; min-width: 0; }
+  .row .name { font-weight: 600; }
+  .row .sub {
+    font-size: 12px; color: var(--dim);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .num { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .suspended { opacity: .55; }
+  .pill {
+    font-size: 11px; padding: 1px 7px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--dim);
+  }
+  .pill.off { color: var(--warn); border-color: var(--warn); }
+  form.add { padding: 14px 16px; display: grid; gap: 9px; }
+  form.add .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+  label { font-size: 12px; color: var(--dim); display: block; margin-bottom: 3px; }
+  input, select {
+    font: inherit; width: 100%; padding: 8px 10px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--fg);
+  }
+  button {
+    font: inherit; font-weight: 600; padding: 9px 18px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--fg); cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.small { padding: 4px 10px; font-size: 12px; font-weight: 500; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #toast {
+    position: fixed; right: 20px; bottom: 20px; padding: 10px 16px; border-radius: 8px;
+    background: var(--panel); border: 1px solid var(--line); font-size: 13px;
+  }
+  #toast.bad { border-color: var(--err); color: var(--err); }
+</style>
+<script src="/static/auth.js"></script>
+</head>
+<body>
+<header>
+  <h1>Vaani</h1>
+  <span class="tag">organisations &amp; numbers</span>
+  <a href="/" style="margin-left:auto">← Console</a>
+  <a href="/calls" style="margin-left:14px">Live calls</a>
+  <a href="/knowledge" style="margin-left:14px">Knowledge</a>
+  <a href="/settings" style="margin-left:14px">Settings</a>
+</header>
+
+<main>
+  <div>
+    <div class="panel">
+      <h2>Organisations</h2>
+      <div id="orgs"></div>
+      <p class="note" id="orgsEmpty" hidden>None yet.</p>
+      <form class="add" id="orgForm">
+        <div class="pair">
+          <div>
+            <label for="orgName">Name</label>
+            <input id="orgName" placeholder="Health University" required />
+          </div>
+          <div>
+            <label for="orgSlug">Short code</label>
+            <input id="orgSlug" placeholder="health" required pattern="[a-zA-Z0-9_-]+" />
+          </div>
+        </div>
+        <button class="primary" type="submit">Add organisation</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Numbers</h2>
+    <div id="dids"></div>
+    <p class="note" id="didsEmpty" hidden>No numbers mapped. Calls fall back to the default agent.</p>
+    <form class="add" id="didForm">
+      <div class="pair">
+        <div>
+          <label for="didNumber">Number</label>
+          <input id="didNumber" placeholder="+91 80 6560 5873" required />
+        </div>
+        <div>
+          <label for="didOrg">Organisation</label>
+          <select id="didOrg" required></select>
+        </div>
+      </div>
+      <div class="pair">
+        <div>
+          <label for="didAgent">Answered by</label>
+          <select id="didAgent" required></select>
+        </div>
+        <div>
+          <label for="didLabel">Label (optional)</label>
+          <input id="didLabel" placeholder="Admissions line" />
+        </div>
+      </div>
+      <button class="primary" type="submit">Map number</button>
+    </form>
+    <p class="note">
+      A number that is not mapped here still gets answered — by the fallback agent in
+      Settings — and its calls are reported as unattributed.
+    </p>
+  </div>
+</main>
+
+<div id="toast" hidden></div>
+
+<script>
+"use strict";
+
+var orgs = [];
+var agents = [];
+
+function el(id) { return document.getElementById(id); }
+
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
+
+var toastTimer = null;
+function toast(message, bad) {
+  var t = el("toast");
+  t.textContent = message;
+  t.className = bad ? "bad" : "";
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { t.hidden = true; }, 3500);
+}
+
+async function send(method, url, body) {
+  var init = { method: method };
+  if (body !== undefined) {
+    init.headers = { "Content-Type": "application/json" };
+    init.body = JSON.stringify(body);
+  }
+  var r = await fetch(url, init);
+  if (!r.ok) {
+    // The server's own message names the actual problem — a taken short code,
+    // an unreadable number — and is far more use than "request failed".
+    var detail = "";
+    try { detail = (await r.json()).detail; } catch (e) { /* no body */ }
+    throw new Error(detail || ("HTTP " + r.status));
+  }
+  return r.status === 204 ? null : r.json();
+}
+
+async function load() {
+  try {
+    orgs = await send("GET", "/api/organisations");
+    agents = await send("GET", "/api/agents");
+  } catch (e) {
+    toast(e.message, true);
+    return;
+  }
+  drawOrgs();
+  fillPickers();
+  await loadDids();
+}
+
+function drawOrgs() {
+  el("orgsEmpty").hidden = orgs.length > 0;
+  el("orgs").innerHTML = orgs.map(function (o) {
+    return '<div class="row' + (o.active ? "" : " suspended") + '">' +
+      '<span class="grow"><span class="name">' + esc(o.name) + "</span>" +
+      (o.active ? "" : ' <span class="pill off">suspended</span>') +
+      '<div class="sub">' + esc(o.slug) + "</div></span>" +
+      '<button class="small" data-toggle="' + o.id + '">' +
+      (o.active ? "Suspend" : "Restore") + "</button></div>";
+  }).join("");
+}
+
+function fillPickers() {
+  el("didOrg").innerHTML = orgs.filter(function (o) { return o.active; })
+    .map(function (o) { return '<option value="' + o.id + '">' + esc(o.name) + "</option>"; })
+    .join("");
+  el("didAgent").innerHTML = agents.map(function (a) {
+    return '<option value="' + esc(a.key) + '">' + esc(a.name || a.key) +
+      " (" + esc(a.key) + ")</option>";
+  }).join("");
+}
+
+async function loadDids() {
+  var rows;
+  try { rows = await send("GET", "/api/dids"); } catch (e) { toast(e.message, true); return; }
+  el("didsEmpty").hidden = rows.length > 0;
+  el("dids").innerHTML = rows.map(function (d) {
+    return '<div class="row' + (d.active ? "" : " suspended") + '">' +
+      '<span class="grow"><span class="num">' + esc(d.number) + "</span>" +
+      (d.active ? "" : ' <span class="pill off">out of service</span>') +
+      '<div class="sub">' + esc(d.organisation_name) + " · answered by " +
+      esc(d.agent_key) + (d.label ? " · " + esc(d.label) : "") + "</div></span>" +
+      '<button class="small" data-release="' + esc(d.number) + '">Release</button></div>';
+  }).join("");
+}
+
+el("orgForm").addEventListener("submit", async function (e) {
+  e.preventDefault();
+  try {
+    await send("POST", "/api/organisations", {
+      name: el("orgName").value.trim(),
+      slug: el("orgSlug").value.trim().toLowerCase(),
+    });
+    el("orgName").value = el("orgSlug").value = "";
+    toast("Organisation added.");
+    await load();
+  } catch (err) { toast(err.message, true); }
+});
+
+el("didForm").addEventListener("submit", async function (e) {
+  e.preventDefault();
+  var number = el("didNumber").value.trim();
+  try {
+    var saved = await send("PUT", "/api/dids/" + encodeURIComponent(number), {
+      organisation_id: Number(el("didOrg").value),
+      agent_key: el("didAgent").value,
+      label: el("didLabel").value.trim() || null,
+    });
+    el("didNumber").value = el("didLabel").value = "";
+    // Echo the stored form: the operator typed one spelling and the carrier
+    // sends another, and seeing the canonical one is how they know it matched.
+    toast("Mapped as " + saved.number);
+    await loadDids();
+  } catch (err) { toast(err.message, true); }
+});
+
+document.addEventListener("click", async function (e) {
+  var btn = e.target.closest ? e.target.closest("button[data-toggle],button[data-release]") : null;
+  if (!btn) return;
+
+  if (btn.dataset.toggle) {
+    var org = orgs.find(function (o) { return String(o.id) === btn.dataset.toggle; });
+    if (!org) return;
+    // Suspending takes every one of its numbers out of service at once.
+    if (org.active && !window.confirm(
+      "Suspend " + org.name + "? Calls to its numbers will be answered by the fallback agent."
+    )) return;
+    try {
+      await send("PATCH", "/api/organisations/" + org.id, { active: !org.active });
+      await load();
+    } catch (err) { toast(err.message, true); }
+    return;
+  }
+
+  var number = btn.dataset.release;
+  if (!window.confirm("Release " + number + "? Calls already recorded against it keep their "
+      + "organisation; new calls will use the fallback agent.")) return;
+  try {
+    await send("DELETE", "/api/dids/" + encodeURIComponent(number));
+    await loadDids();
+  } catch (err) { toast(err.message, true); }
+});
+
+load();
+</script>
+</body>
+</html>

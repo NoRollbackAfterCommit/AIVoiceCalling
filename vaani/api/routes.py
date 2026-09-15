@@ -8,6 +8,7 @@ ws_voice.py; nothing here touches audio.
 from __future__ import annotations
 
 import time
+from dataclasses import asdict
 from typing import Any
 
 from fastapi import APIRouter, Body, File, HTTPException, Query, Request, UploadFile
@@ -140,6 +141,113 @@ async def delete_agent(key: str, request: Request) -> dict[str, str]:
     if services.profile_store is not None:
         await services.profile_store.delete(key)
     services.profiles.pop(key, None)
+    return {"status": "deleted"}
+
+
+# ---------------------------------------------------------------------------
+# Organisations and the numbers that reach them
+# ---------------------------------------------------------------------------
+
+
+class OrganisationIn(BaseModel):
+    slug: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=160)
+
+
+class OrganisationPatch(BaseModel):
+    name: str | None = Field(default=None, max_length=160)
+    active: bool | None = None
+
+
+class DidIn(BaseModel):
+    organisation_id: int
+    agent_key: str = Field(min_length=1, max_length=64)
+    label: str | None = Field(default=None, max_length=120)
+    active: bool = True
+
+
+def _tenancy(request: Request) -> Any:
+    store = getattr(request.app.state.services, "tenancy", None)
+    if store is None:
+        # A bare install with no database. Every call is unattributed, and there
+        # is nowhere to put an organisation, so this is a configuration answer
+        # rather than a missing page.
+        raise HTTPException(503, "No database is configured, so organisations cannot be stored")
+    return store
+
+
+@router.get("/organisations", tags=["tenancy"])
+async def list_organisations(request: Request) -> list[dict[str, Any]]:
+    return [asdict(o) for o in await _tenancy(request).organisations()]
+
+
+@router.post("/organisations", tags=["tenancy"], status_code=201)
+async def create_organisation(body: OrganisationIn, request: Request) -> dict[str, Any]:
+    try:
+        org = await _tenancy(request).create_organisation(slug=body.slug, name=body.name)
+    except ValueError as exc:
+        # 409 rather than 400: the request is well formed, the slug is taken.
+        raise HTTPException(409, str(exc)) from exc
+    log.info("organisation created", extra={"slug": org.slug})
+    return asdict(org)
+
+
+@router.patch("/organisations/{organisation_id}", tags=["tenancy"])
+async def update_organisation(
+    organisation_id: int, body: OrganisationPatch, request: Request
+) -> dict[str, Any]:
+    store = _tenancy(request)
+    if await store.organisation(organisation_id) is None:
+        raise HTTPException(404, f"No organisation {organisation_id}")
+    if body.name is not None:
+        await store.rename_organisation(organisation_id, body.name)
+    if body.active is not None:
+        # Suspending an organisation takes its numbers out of service without
+        # deleting anything: the calls already recorded against them still have
+        # to be attributable.
+        await store.set_organisation_active(organisation_id, body.active)
+        log.info(
+            "organisation availability changed",
+            extra={"organisation_id": organisation_id, "active": body.active},
+        )
+    return asdict(await store.organisation(organisation_id))
+
+
+@router.get("/dids", tags=["tenancy"])
+async def list_dids(
+    request: Request, organisation_id: int | None = Query(default=None)
+) -> list[dict[str, Any]]:
+    return await _tenancy(request).dids_with_organisation(organisation_id)
+
+
+@router.put("/dids/{number}", tags=["tenancy"])
+async def upsert_did(number: str, body: DidIn, request: Request) -> dict[str, Any]:
+    store = _tenancy(request)
+    if await store.organisation(body.organisation_id) is None:
+        # Otherwise the number resolves to an organisation nobody can administer.
+        raise HTTPException(404, f"No organisation {body.organisation_id}")
+    try:
+        did = await store.upsert_did(
+            number=number,
+            organisation_id=body.organisation_id,
+            agent_key=body.agent_key,
+            label=body.label,
+            active=body.active,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    log.info(
+        "did mapped",
+        extra={"did": did.number, "organisation_id": did.organisation_id, "agent": did.agent_key},
+    )
+    return asdict(did)
+
+
+@router.delete("/dids/{number}", tags=["tenancy"])
+async def delete_did(number: str, request: Request) -> dict[str, str]:
+    """Releases the number. The calls it already took keep their attribution,
+    which is why they store the organisation rather than joining through here."""
+    await _tenancy(request).delete_did(number)
     return {"status": "deleted"}
 
 

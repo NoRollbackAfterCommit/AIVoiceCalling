@@ -193,6 +193,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         async def calls_page() -> FileResponse:
             return FileResponse(str(static_dir / "calls.html"))
 
+        @app.get("/organisations", include_in_schema=False)
+        async def organisations_page() -> FileResponse:
+            return FileResponse(str(static_dir / "organisations.html"))
+
     return app
 
 

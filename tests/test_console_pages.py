@@ -21,6 +21,7 @@ TOKEN = "s3cret-token"
 PAGES = [
     ("/", 'id="dtmf"'),
     ("/calls", 'id="roster"'),
+    ("/organisations", 'id="didForm"'),
     ("/knowledge", 'id="drop"'),
     ("/settings", 'id="dirty"'),
 ]

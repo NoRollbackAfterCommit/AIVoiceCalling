@@ -69,6 +69,11 @@ class CallManager:
                 "agent_key": s.record.agent_key,
                 "direction": s.record.direction,
                 "caller_number": s.record.caller_number,
+                # Whose call centre this is. The console lists live calls across
+                # every organisation at once, so a roster without this leaves a
+                # supervisor unable to tell which ringing line is theirs.
+                "organisation_id": s.record.organisation_id,
+                "did": s.record.did,
                 "duration_s": round(s.record.duration_s, 1),
                 "turns": len(s.record.turns),
             }

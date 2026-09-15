@@ -138,3 +138,25 @@ async def test_an_unattributed_call_is_stored_as_such(world):
     await svc.calls.create_call(session.record)
     stored = await svc.calls.get_call(session.call_id)
     assert stored["organisation_id"] is None
+
+
+async def test_a_live_call_says_which_organisation_it_belongs_to(world):
+    """The supervisor console lists live calls across every organisation, so the
+    roster has to carry the attribution — otherwise a supervisor cannot tell
+    whose call centre a ringing line belongs to."""
+    from vaani.pipeline.manager import CallManager
+
+    svc, health, _ = world
+    manager = CallManager(max_concurrent=5)
+    session = CallSession(
+        transport=FakeTransport(),
+        services=svc,
+        agent_key="health-exams",
+        organisation_id=health.id,
+        did="+918065605873",
+    )
+    await manager.register(session)
+
+    row = manager.live()[0]
+    assert row["organisation_id"] == health.id
+    assert row["did"] == "+918065605873"

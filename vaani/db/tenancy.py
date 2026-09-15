@@ -140,6 +140,37 @@ class TenancyRepository:
             rows = await session.scalars(select(DidRow).order_by(DidRow.number))
             return [_did(r) for r in rows.all()]
 
+    async def dids_with_organisation(
+        self, organisation_id: int | None = None
+    ) -> list[dict[str, Any]]:
+        """Every number with its owner's name attached.
+
+        Joined here rather than looked up per row by the caller: the portal
+        lists every number across every organisation, and a request per row is
+        how a list page becomes slow the week a customer buys fifty numbers.
+        """
+        async with self._sessions() as session:
+            stmt = (
+                select(DidRow, OrganisationRow)
+                .join(OrganisationRow, OrganisationRow.id == DidRow.organisation_id)
+                .order_by(OrganisationRow.name, DidRow.number)
+            )
+            if organisation_id is not None:
+                stmt = stmt.where(DidRow.organisation_id == organisation_id)
+            rows = (await session.execute(stmt)).all()
+            return [
+                {
+                    "number": did.number,
+                    "organisation_id": did.organisation_id,
+                    "organisation_name": org.name,
+                    "organisation_slug": org.slug,
+                    "agent_key": did.agent_key,
+                    "label": did.label,
+                    "active": bool(did.active),
+                }
+                for did, org in rows
+            ]
+
     async def delete_did(self, number: str) -> None:
         canonical = to_e164(number)
         if canonical is None:
