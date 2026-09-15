@@ -24,6 +24,7 @@ from vaani.config import Settings, get_settings
 from vaani.core.logging import configure_logging, get_logger
 from vaani.core.registry import build_services
 from vaani.db.accounts import AccountRepository
+from vaani.db.analytics import AnalyticsRepository
 from vaani.db.profiles import ProfileRepository
 from vaani.db.repository import CallRepository
 from vaani.db.tenancy import TenancyRepository
@@ -58,6 +59,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     services.profile_store = ProfileRepository(repository.sessions)
     services.tenancy = TenancyRepository(repository.sessions)
     services.accounts = AccountRepository(repository.sessions)
+    services.analytics = AnalyticsRepository(repository.sessions)
 
     # Generated once and kept, rather than per boot: a random key each start
     # would sign every operator out whenever the container restarted, including
@@ -236,6 +238,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         @app.get("/users", include_in_schema=False)
         async def users_page() -> FileResponse:
             return FileResponse(str(static_dir / "users.html"))
+
+        @app.get("/reports", include_in_schema=False)
+        async def reports_page() -> FileResponse:
+            return FileResponse(str(static_dir / "dashboard.html"))
 
     return app
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from vaani.db.analytics import AnalyticsRepository
 from vaani.db.repository import CallRepository
 from vaani.db.tenancy import TenancyRepository
 from vaani.main import create_app
@@ -24,6 +25,7 @@ async def client(services, settings, tmp_path):
     await repository.start()
     services.calls = repository
     services.tenancy = TenancyRepository(repository.sessions)
+    services.analytics = AnalyticsRepository(repository.sessions)
     app.state.services = services
     app.state.calls = CallManager(max_concurrent=5)
     app.state.announcements = CallAnnouncements()

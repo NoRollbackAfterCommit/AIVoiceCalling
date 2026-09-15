@@ -24,6 +24,7 @@ PAGES = [
     ("/login", 'autocomplete="current-password"'),
     ("/organisations", 'id="didForm"'),
     ("/users", 'id="roleHelp"'),
+    ("/reports", 'id="figures"'),
     ("/knowledge", 'id="drop"'),
     ("/settings", 'id="dirty"'),
 ]

@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Vaani — Reports</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --line: #30363d;
+    --fg: #e6edf3; --dim: #8b949e;
+    --accent: #2f81f7; --ok: #3fb950; --warn: #d29922; --err: #f85149;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f6f8fa; --panel:#fff; --line:#d8dee4; --fg:#1f2328; --dim:#656d76; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    padding: 16px 24px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  }
+  h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  .tag {
+    font-size: 12px; color: var(--dim); border: 1px solid var(--line);
+    padding: 2px 8px; border-radius: 999px;
+  }
+  header a { color: var(--accent); text-decoration: none; font-size: 13px; }
+  main { padding: 20px 24px; display: grid; gap: 20px; }
+  .filters {
+    display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;
+    padding: 14px 16px; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 10px;
+  }
+  label { font-size: 12px; color: var(--dim); display: block; margin-bottom: 3px; }
+  select, input {
+    font: inherit; padding: 8px 10px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--fg);
+  }
+  button {
+    font: inherit; font-weight: 600; padding: 9px 16px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--fg); cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  /* Headline figures. Big numbers only where the number is the point. */
+  .figures { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; }
+  .figure {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 14px 16px;
+  }
+  .figure .label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--dim);
+  }
+  .figure .value {
+    font-size: 28px; font-weight: 650; font-variant-numeric: tabular-nums;
+    line-height: 1.2; margin-top: 2px;
+  }
+  .figure .hint { font-size: 12px; color: var(--dim); }
+
+  .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 900px) { .panels { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .panel h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--dim); margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--line);
+  }
+  .note { font-size: 12px; color: var(--dim); padding: 14px 16px; margin: 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 16px; border-bottom: 1px solid var(--line); }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); }
+  td.n { text-align: right; font-variant-numeric: tabular-nums; }
+  .bar { height: 6px; background: var(--accent); border-radius: 3px; min-width: 2px; }
+
+  /* The trend, drawn from the numbers rather than by a charting library:
+     one series of daily counts does not justify 90 KB of dependency. */
+  #trend { display: flex; align-items: flex-end; gap: 3px; height: 130px; padding: 16px; }
+  #trend .day { flex: 1; background: var(--accent); border-radius: 2px 2px 0 0; min-height: 2px; }
+  #trend .day:hover { background: var(--ok); }
+  .scale {
+    display: flex; justify-content: space-between;
+    font-size: 11px; color: var(--dim); padding: 0 16px 12px;
+  }
+  .split { padding: 14px 16px; display: grid; gap: 10px; }
+  .split .row { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+  .split .row .k { width: 132px; color: var(--dim); }
+  .split .row .v { font-variant-numeric: tabular-nums; font-weight: 600; }
+  ul.gaps { margin: 0; padding: 14px 16px 16px 32px; font-size: 14px; }
+  ul.gaps li { margin-bottom: 6px; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+<script src="/static/auth.js"></script>
+</head>
+<body>
+<header>
+  <h1>Vaani</h1>
+  <span class="tag">reports</span>
+  <a href="/" style="margin-left:auto">← Console</a>
+  <a href="/calls" style="margin-left:14px">Live calls</a>
+  <a href="/organisations" style="margin-left:14px" data-roles="platform_admin">Organisations</a>
+  <a href="/users" style="margin-left:14px" data-roles="platform_admin,org_admin">People</a>
+  <a href="/knowledge" style="margin-left:14px">Knowledge</a>
+  <a href="/settings" style="margin-left:14px" data-roles="platform_admin">Settings</a>
+</header>
+
+<main>
+  <div class="filters">
+    <div id="orgFilter" hidden>
+      <label for="org">Organisation</label>
+      <select id="org"></select>
+    </div>
+    <div>
+      <label for="did">Number</label>
+      <select id="did"></select>
+    </div>
+    <div>
+      <label for="days">Period</label>
+      <select id="days">
+        <option value="7">Last 7 days</option>
+        <option value="30" selected>Last 30 days</option>
+        <option value="90">Last 90 days</option>
+        <option value="365">Last year</option>
+      </select>
+    </div>
+    <button class="primary" id="apply">Apply</button>
+    <button id="export">Export CSV</button>
+    <span class="note" id="status" style="padding:0"></span>
+  </div>
+
+  <div class="figures" id="figures"></div>
+
+  <div class="panels">
+    <div class="panel">
+      <h2>Calls per day</h2>
+      <div id="trend"></div>
+      <div class="scale"><span id="trendFrom"></span><span id="trendTo"></span></div>
+    </div>
+
+    <div class="panel">
+      <h2>What the caller waited for</h2>
+      <div class="split" id="latency"></div>
+      <p class="note">
+        The wait is recognition, the model and the first audio added together. The rest of a
+        turn is the agent speaking at real time, which is not latency and is shown apart.
+      </p>
+    </div>
+  </div>
+
+  <div class="panels">
+    <div class="panel">
+      <h2>How calls ended</h2>
+      <table id="outcomes"></table>
+      <p class="note" id="outcomesEmpty" hidden>No calls in this period.</p>
+    </div>
+    <div class="panel">
+      <h2>By number</h2>
+      <table id="perDid"></table>
+      <p class="note" id="perDidEmpty" hidden>No calls against a mapped number.</p>
+    </div>
+  </div>
+
+  <div class="panels">
+    <div class="panel">
+      <h2>Languages</h2>
+      <table id="languages"></table>
+      <p class="note" id="languagesEmpty" hidden>Nothing recorded.</p>
+    </div>
+    <div class="panel">
+      <h2>Questions with no answer</h2>
+      <ul class="gaps" id="gaps"></ul>
+      <p class="note" id="gapsEmpty" hidden>
+        Nothing unanswered in this period — or not enough calls to tell yet.
+      </p>
+    </div>
+  </div>
+</main>
+
+<script>
+"use strict";
+
+var me = null;
+
+function el(id) { return document.getElementById(id); }
+
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
+
+function seconds(s) {
+  s = Math.round(Number(s) || 0);
+  return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+}
+
+async function get(url) {
+  var r = await fetch(url, { credentials: "same-origin" });
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}
+
+function query() {
+  var parts = ["days=" + encodeURIComponent(el("days").value)];
+  if (!el("orgFilter").hidden && el("org").value) parts.push("organisation_id=" + el("org").value);
+  if (el("did").value) parts.push("did=" + encodeURIComponent(el("did").value));
+  return parts.join("&");
+}
+
+async function boot() {
+  me = await window.vaaniAuth.me();
+  if (!me) return;  // auth.js is already sending them to sign in
+
+  if (me.role === "platform_admin") {
+    try {
+      var orgs = await get("/api/organisations");
+      el("org").innerHTML = '<option value="">All organisations</option>' +
+        orgs.map(function (o) {
+          return '<option value="' + o.id + '">' + esc(o.name) + "</option>";
+        }).join("");
+      el("orgFilter").hidden = false;
+    } catch (e) { /* the filter is a convenience, not a requirement */ }
+  }
+  try {
+    var dids = await get("/api/dids");
+    el("did").innerHTML = '<option value="">All numbers</option>' +
+      dids.map(function (d) {
+        return '<option value="' + esc(d.number) + '">' + esc(d.number) +
+          (d.label ? " — " + esc(d.label) : "") + "</option>";
+      }).join("");
+  } catch (e) {
+    el("did").innerHTML = '<option value="">All numbers</option>';
+  }
+  await draw();
+}
+
+async function draw() {
+  el("status").textContent = "Loading…";
+  var s;
+  try {
+    s = await get("/api/analytics/summary?" + query());
+  } catch (e) {
+    el("status").textContent = "Could not load the figures.";
+    return;
+  }
+  el("status").textContent = "";
+
+  var figures = [
+    ["Calls", s.calls, "in the last " + s.window_days + " days"],
+    ["Handled by the bot", Math.round((s.containment || 0) * 100) + "%",
+     s.transferred + " passed to a person"],
+    ["Average call", seconds(s.avg_duration_s), "per caller"],
+    ["Caller waited", ((s.latency.wait_ms || 0) / 1000).toFixed(1) + "s",
+     "before the agent replied"],
+    ["Live now", s.live, s.capacity ? "of " + s.capacity + " lines" : "calls in progress"],
+  ];
+  el("figures").innerHTML = figures.map(function (f) {
+    return '<div class="figure"><div class="label">' + esc(f[0]) + "</div>" +
+      '<div class="value">' + esc(f[1]) + "</div>" +
+      '<div class="hint">' + esc(f[2]) + "</div></div>";
+  }).join("");
+
+  // Trend.
+  var days = s.per_day || [];
+  var peak = days.reduce(function (m, d) { return Math.max(m, d.calls); }, 1);
+  el("trend").innerHTML = days.map(function (d) {
+    return '<div class="day" style="height:' + Math.round((d.calls / peak) * 100) + '%" ' +
+      'title="' + esc(d.day) + ": " + d.calls + ' calls"></div>';
+  }).join("") || '<p class="note">No calls in this period.</p>';
+  el("trendFrom").textContent = days.length ? days[0].day : "";
+  el("trendTo").textContent = days.length ? days[days.length - 1].day : "";
+
+  // The latency split, which is the thing most often misread.
+  var l = s.latency || {};
+  el("latency").innerHTML = [
+    ["Recognition", l.stt_ms], ["Model", l.agent_ms], ["First audio", l.tts_first_chunk_ms],
+  ].map(function (r) {
+    var share = l.wait_ms ? Math.round((r[1] / l.wait_ms) * 100) : 0;
+    return '<div class="row"><span class="k">' + esc(r[0]) + "</span>" +
+      '<span class="bar" style="width:' + share + '%"></span>' +
+      '<span class="v">' + Math.round(r[1] || 0) + " ms</span></div>";
+  }).join("") +
+    '<div class="row"><span class="k">Caller waited</span><span class="v">' +
+    ((l.wait_ms || 0) / 1000).toFixed(1) + "s</span></div>" +
+    '<div class="row"><span class="k">Agent spoke</span><span class="v">' +
+    ((l.spoken_ms || 0) / 1000).toFixed(1) + "s</span></div>" +
+    '<div class="row"><span class="k">Turns measured</span><span class="v">' +
+    (l.turns || 0) + "</span></div>";
+
+  table("outcomes", ["Outcome", "Calls"], Object.keys(s.outcomes || {}).map(function (k) {
+    return [k.replace(/_/g, " "), s.outcomes[k]];
+  }));
+  table("languages", ["Language", "Calls"], Object.keys(s.languages || {}).map(function (k) {
+    return [k, s.languages[k]];
+  }));
+  table("perDid", ["Number", "Calls", "Average"], (s.per_did || []).map(function (d) {
+    return [d.did, d.calls, seconds(d.avg_duration_s)];
+  }));
+
+  var gaps = s.knowledge_gaps || [];
+  el("gapsEmpty").hidden = gaps.length > 0;
+  el("gaps").innerHTML = gaps.map(function (q) { return "<li>" + esc(q) + "</li>"; }).join("");
+}
+
+function table(id, headings, rows) {
+  el(id + "Empty").hidden = rows.length > 0;
+  if (!rows.length) { el(id).innerHTML = ""; return; }
+  el(id).innerHTML =
+    "<tr>" + headings.map(function (h, i) {
+      return "<th" + (i ? ' class="n"' : "") + ">" + esc(h) + "</th>";
+    }).join("") + "</tr>" +
+    rows.map(function (r) {
+      return "<tr>" + r.map(function (c, i) {
+        return "<td" + (i ? ' class="n"' : "") + ">" + esc(c) + "</td>";
+      }).join("") + "</tr>";
+    }).join("");
+}
+
+el("apply").addEventListener("click", draw);
+el("export").addEventListener("click", function () {
+  // A plain navigation, so the browser handles the download and the session
+  // cookie goes with it.
+  location.href = "/api/analytics/export?" + query();
+});
+
+boot();
+</script>
+</body>
+</html>

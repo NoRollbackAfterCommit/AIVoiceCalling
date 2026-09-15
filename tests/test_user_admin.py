@@ -13,6 +13,7 @@ import httpx
 import pytest
 
 from vaani.db.accounts import AccountRepository, Role
+from vaani.db.analytics import AnalyticsRepository
 from vaani.db.repository import CallRepository
 from vaani.db.tenancy import TenancyRepository
 from vaani.main import create_app
@@ -31,6 +32,7 @@ async def world(services, settings, tmp_path):
     await repository.start()
     services.calls = repository
     services.tenancy = TenancyRepository(repository.sessions)
+    services.analytics = AnalyticsRepository(repository.sessions)
     services.accounts = AccountRepository(repository.sessions)
     app.state.services = services
     app.state.calls = CallManager(max_concurrent=5)

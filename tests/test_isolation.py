@@ -16,6 +16,7 @@ import httpx
 import pytest
 
 from vaani.db.accounts import AccountRepository, Role
+from vaani.db.analytics import AnalyticsRepository
 from vaani.db.repository import CallRepository
 from vaani.db.tenancy import TenancyRepository
 from vaani.main import create_app
@@ -38,6 +39,7 @@ async def world(services, settings, tmp_path):
     await repository.start()
     services.calls = repository
     services.tenancy = TenancyRepository(repository.sessions)
+    services.analytics = AnalyticsRepository(repository.sessions)
     services.accounts = AccountRepository(repository.sessions)
     app.state.services = services
     app.state.calls = CallManager(max_concurrent=10)
@@ -252,3 +254,58 @@ async def test_the_shared_token_still_reaches_everything(world):
         f"/api/calls/{calls['beta']}", headers={"Authorization": f"Bearer {TOKEN}"}
     )
     assert r.status_code == 200
+
+
+# -- reporting -------------------------------------------------------------
+
+
+async def test_the_summary_counts_only_your_own_organisations_calls(world):
+    client, _alpha, _beta, _calls = world
+    await _as(client, "sup@alpha.example")
+
+    mine = (await client.get("/api/analytics/summary")).json()
+    assert mine["calls"] == 1, "another organisation's calls were counted"
+
+    await client.post("/api/auth/logout")
+    await _as(client, "root@euphoria.example")
+    assert (await client.get("/api/analytics/summary")).json()["calls"] == 2
+
+
+async def test_naming_another_organisation_in_the_summary_is_ignored(world):
+    client, _alpha, beta, _calls = world
+    await _as(client, "sup@alpha.example")
+    r = await client.get(f"/api/analytics/summary?organisation_id={beta.id}")
+    assert r.json()["calls"] == 1
+
+
+async def test_capacity_is_a_platform_figure_not_a_customers(world):
+    """How busy the box is says nothing useful to one customer, and says
+    something about the others."""
+    client, _alpha, _beta, _calls = world
+    await _as(client, "sup@alpha.example")
+    assert "capacity" not in (await client.get("/api/analytics/summary")).json()
+
+    await client.post("/api/auth/logout")
+    await _as(client, "root@euphoria.example")
+    assert "capacity" in (await client.get("/api/analytics/summary")).json()
+
+
+async def test_the_csv_export_cannot_walk_out_with_another_organisations_calls(world):
+    client, _alpha, beta, calls = world
+    await _as(client, "sup@alpha.example")
+
+    r = await client.get(f"/api/analytics/export?organisation_id={beta.id}")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/csv")
+    assert calls["alpha"] in r.text
+    assert calls["beta"] not in r.text, "an export leaked another organisation's calls"
+
+
+async def test_the_export_neutralises_spreadsheet_formulas(world):
+    """A caller number starting with + is read as a formula by Excel."""
+    from vaani.api.routes import _csv_safe
+
+    assert _csv_safe("+918065605873").startswith("'")
+    assert _csv_safe("=cmd|'/c calc'!A0").startswith("'")
+    assert _csv_safe("ordinary") == "ordinary"
+    assert _csv_safe(42) == 42

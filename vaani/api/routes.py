@@ -7,16 +7,21 @@ ws_voice.py; nothing here touches audio.
 
 from __future__ import annotations
 
+import csv
+import io
 import time
 from dataclasses import asdict
+from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Body, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Body, File, HTTPException, Query, Request, Response, UploadFile
 from pydantic import BaseModel, Field
 
 from vaani.agent.prompt import AgentProfile, profile_to_dict, render_system_prompt
 from vaani.api.scope import ensure_visible, is_unrestricted, visible_organisation
 from vaani.core.logging import get_logger
+from vaani.db.analytics import default_range
+from vaani.telephony.numbers import to_e164
 
 log = get_logger(__name__)
 router = APIRouter()
@@ -477,49 +482,110 @@ async def hangup_call(call_id: str, request: Request) -> dict[str, str]:
 
 
 @router.get("/analytics/summary", tags=["analytics"])
-async def analytics(request: Request) -> dict[str, Any]:
-    manager = request.app.state.calls
-    mine = visible_organisation(request)
-    stats = manager.stats()
-    # Deployment-wide figures belong to the platform. A customer sees how many
-    # of the lines are theirs, not how busy the box is.
-    if mine is not None:
-        own_live = manager.live(mine)
-        stats = {**stats, "live": len(own_live)}
-        stats.pop("capacity", None)
-        stats.pop("total_calls", None)
+async def analytics(
+    request: Request,
+    organisation_id: int | None = Query(default=None),
+    did: str | None = Query(default=None),
+    days: int = Query(default=30, ge=1, le=366),
+) -> dict[str, Any]:
+    """Figures over the stored calls, for one organisation or the whole platform.
 
-    # Knowledge-gap mining: the questions that produced no useful retrieval are
-    # the highest-value input to the next round of content authoring.
-    languages: dict[str, int] = {}
-    unresolved: list[str] = []
-    for record in manager.history(200):
-        if mine is not None and record.get("organisation_id") != mine:
+    Read from the database rather than from the in-memory ring of the last two
+    hundred calls, which is lost whenever the container is recreated — and a
+    deploy recreates it every time.
+    """
+    mis = _analytics(request)
+    scope_id = visible_organisation(request, organisation_id)
+    since, until = default_range(days)
+
+    summary = await mis.summary(organisation_id=scope_id, did=did, since=since, until=until)
+    summary["knowledge_gaps"] = await mis.knowledge_gaps(
+        organisation_id=scope_id, did=did, since=since, until=until
+    )
+    summary["window_days"] = days
+    summary["organisation_id"] = scope_id
+    summary["live"] = len(request.app.state.calls.live(scope_id))
+    if is_unrestricted(request):
+        # Capacity is a property of the box, not of a customer's call centre.
+        summary["capacity"] = request.app.state.services.settings.max_concurrent_calls
+    return summary
+
+
+@router.get("/analytics/export", tags=["analytics"])
+async def export_calls(
+    request: Request,
+    organisation_id: int | None = Query(default=None),
+    did: str | None = Query(default=None),
+    days: int = Query(default=30, ge=1, le=366),
+    limit: int = Query(default=5000, ge=1, le=50000),
+) -> Response:
+    """The call list as CSV, honouring exactly the scope the API does.
+
+    An export that ignored scoping would be the easiest way to walk out with
+    another organisation's calls.
+    """
+    repository = request.app.state.services.calls
+    if repository is None:
+        raise HTTPException(503, "No database is configured, so there is nothing to export")
+
+    scope_id = visible_organisation(request, organisation_id)
+    since, _until = default_range(days)
+    rows = await repository.recent(limit, scope_id)
+    wanted = to_e164(did) or did if did else None
+
+    columns = [
+        "call_id",
+        "started_at",
+        "organisation_id",
+        "did",
+        "caller_number",
+        "agent_key",
+        "direction",
+        "duration_s",
+        "outcome",
+        "disposition",
+        "reference",
+        "language",
+    ]
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(columns)
+    for row in rows:
+        if row.get("started_at", 0) < since:
             continue
-        for lang in record.get("languages", []):
-            languages[lang] = languages.get(lang, 0) + 1
-        for turn in record.get("turns", []):
-            if "search_knowledge" in turn.get("tools", []) and _looks_unresolved(turn):
-                unresolved.append(turn["caller"])
+        if wanted and row.get("did") != wanted:
+            continue
+        writer.writerow([_csv_safe(row.get(c)) for c in columns])
 
-    return {
-        **stats,
-        "languages": languages,
-        "knowledge_gaps": unresolved[:25],
-    }
-
-
-def _looks_unresolved(turn: dict[str, Any]) -> bool:
-    reply = (turn.get("agent") or "").lower()
-    return any(
-        phrase in reply
-        for phrase in ("could not find", "do not have that", "don't have that", "not sure")
+    stamp = datetime.now(tz=UTC).strftime("%Y%m%d")
+    name = f"calls-{stamp}.csv"
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
     )
 
 
-# ---------------------------------------------------------------------------
-# Text-only conversation, for testing an agent without audio
-# ---------------------------------------------------------------------------
+# A leading one of these makes a spreadsheet treat the cell as a formula.
+_FORMULA_STARTERS = ("=", "+", "-", "@", chr(9), chr(13))
+
+
+def _csv_safe(value: Any) -> Any:
+    """Stop a spreadsheet treating a field as a formula.
+
+    A caller number beginning with + is the obvious one, and a transcript
+    fragment starting with = would be executed on open in Excel.
+    """
+    if isinstance(value, str) and value[:1] in _FORMULA_STARTERS:
+        return "'" + value
+    return value
+
+
+def _analytics(request: Request) -> Any:
+    mis = getattr(request.app.state.services, "analytics", None)
+    if mis is None:
+        raise HTTPException(503, "No database is configured, so there are no figures to report")
+    return mis
 
 
 @router.post("/simulate/turn", tags=["testing"])
