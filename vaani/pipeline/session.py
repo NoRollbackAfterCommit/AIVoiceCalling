@@ -301,7 +301,7 @@ class CallSession:
             # leaves an audit trail rather than nothing.
             with contextlib.suppress(Exception):
                 await self._services.calls.create_call(self.record)
-        await self._emit_state()
+        await self._send_quietly({"type": "state", "state": self.state})
         watchdog = asyncio.create_task(self._watchdog())
         # The consumer runs concurrently with the greeting rather than after it.
         # Awaiting the greeting first leaves nothing draining the inbox while the
@@ -798,6 +798,13 @@ class CallSession:
                         "no audio produced for a reply",
                         extra={"chars": len(text), "voice": voice},
                     )
+                    # A log line nobody is tailing is not a signal. Fifty
+                    # simultaneous calls drew twenty-one rate-limit rejections
+                    # from the TTS vendor, and each one left a caller holding a
+                    # connected line in silence with nothing on screen to say so.
+                    # Emitted here rather than raised, because the call carries
+                    # on and the next turn may well be fine.
+                    self._emit({"type": "reply_silent", "chars": len(text), "kind": kind})
                 finished.set()
 
         self._speaking_task = asyncio.create_task(play())
@@ -949,13 +956,21 @@ class CallSession:
         if state == self.state:
             return
         self.state = state
-        task = asyncio.create_task(self._emit_state())
+        self._emit({"type": "state", "state": self.state})
+
+    def _emit(self, event: dict[str, Any]) -> None:
+        """Send without awaiting, for callers that cannot.
+
+        Used from `_set_state` and from playback's cleanup, which runs inside a
+        `finally` during cancellation where an await is not safe to take.
+        """
+        task = asyncio.create_task(self._send_quietly(event))
         self._emits.add(task)
         task.add_done_callback(self._emits.discard)
 
-    async def _emit_state(self) -> None:
+    async def _send_quietly(self, event: dict[str, Any]) -> None:
         with contextlib.suppress(Exception):
-            await self._transport.send_event({"type": "state", "state": self.state})
+            await self._transport.send_event(event)
 
 
 # Spoken confirmation that the language took effect, in the language itself.

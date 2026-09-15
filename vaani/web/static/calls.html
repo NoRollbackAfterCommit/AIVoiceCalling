@@ -88,6 +88,9 @@
   .msg.caller .who-col { color: var(--accent); }
   .msg.agent .who-col { color: var(--ok); }
   .msg.sys { font-size: 13px; color: var(--dim); }
+  /* A caller on a live line hearing nothing is the one thing on this page
+     that needs to catch the eye, so it does not read as ordinary chatter. */
+  .msg.warn { font-size: 13px; color: var(--warn); font-weight: 600; }
   .body { flex: 1; white-space: pre-wrap; word-break: break-word; }
   .meta { font-size: 12px; color: var(--dim); margin-top: 3px; font-variant-numeric: tabular-nums; }
   .meta .bad { color: var(--warn); }
@@ -293,6 +296,12 @@ function onEvent(ev) {
     case "barge_in":
       push(c, "sys", "Caller interrupted");
       break;
+    case "reply_silent":
+      // The line is up and the caller is hearing nothing. Usually the speech
+      // vendor rate-limiting a burst of calls, which is invisible otherwise.
+      c.silent = (c.silent || 0) + 1;
+      push(c, "warn", "Reply produced no audio — the caller heard silence");
+      break;
     case "dtmf":
       push(c, "sys", "Keypad: " + ev.digit);
       break;
@@ -338,7 +347,9 @@ function drawRoster() {
     return '<button class="call" role="option" aria-selected="' + (c.call_id === selected) +
       '" data-id="' + esc(c.call_id) + '">' +
       '<span class="dot ' + esc(c.state || "") + '"></span>' +
-      '<span class="who">' + esc(c.caller_number || "unknown caller") + '</span>' +
+      '<span class="who">' + esc(c.caller_number || "unknown caller") +
+        (c.silent ? ' <span title="replies reached the caller as silence" '
+          + 'style="color:var(--warn)">⚠</span>' : '') + '</span>' +
       '<span class="age">' + secs(c.duration_s) + "</span>" +
       '<span class="preview">' + esc(c.preview || (c.agent_key || "")) + "</span>" +
       "</button>";
@@ -370,10 +381,11 @@ function drawDetail() {
   var atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
 
   log.innerHTML = c.messages.map(function (m) {
-    var who = m.role === "sys" ? "" : m.role;
+    var quiet = m.role === "sys" || m.role === "warn";
+    var who = quiet ? "" : m.role;
     var meta = m.metrics ? metricsLine(m.metrics) : "";
     return '<div class="msg ' + m.role + '">' +
-      (m.role === "sys" ? "" : '<span class="who-col">' + esc(who) + "</span>") +
+      (quiet ? "" : '<span class="who-col">' + esc(who) + "</span>") +
       '<span class="body">' + esc(m.text) + meta + "</span></div>";
   }).join("");
 

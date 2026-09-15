@@ -147,3 +147,94 @@ async def test_an_api_error_is_raised_not_silently_empty():
 async def test_start_without_api_key_fails_loudly():
     with pytest.raises(ValueError, match="API key"):
         await SarvamTTS(api_key="").start()
+
+
+# -- rate limiting ---------------------------------------------------------
+#
+# Measured against production on 2026-09-15: fifty simultaneous calls produced
+# twenty-one `429 Too Many Requests` from this endpoint, and every one of them
+# became a caller holding a live line in silence. Thirty concurrent calls was
+# clean, so the burst that breaks it is narrow enough to ride out.
+
+
+async def test_a_rate_limited_request_is_retried_rather_than_losing_the_reply():
+    attempts = 0
+    payload = _pcm(500)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(429, json={"error": "rate limited"})
+        return httpx.Response(200, content=payload)
+
+    tts = SarvamTTS(api_key="k", retry_backoff_s=0.0)
+    tts._http = _stub(handler)
+
+    assert b"".join([c async for c in tts.stream("नमस्ते")]) == payload
+    assert attempts == 2, "the 429 must be retried, not surfaced as a silent turn"
+
+
+async def test_the_caller_is_not_kept_waiting_forever_by_a_limit_that_persists():
+    """Retries are bounded: a caller waiting on dead air is worse than an error.
+
+    The session logs the failure and recovers the turn; what it cannot do is sit
+    on a socket retrying while the person on the phone listens to nothing.
+    """
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(429, json={"error": "rate limited"})
+
+    tts = SarvamTTS(api_key="k", retry_backoff_s=0.0)
+    tts._http = _stub(handler)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        [c async for c in tts.stream("नमस्ते")]
+    assert attempts == 3, "one attempt plus two retries, then give up"
+
+
+async def test_a_bad_request_is_not_retried():
+    """Only the limit is worth retrying. A 400 will fail identically every time,
+    and retrying it spends the caller's silence on a certainty."""
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(400, json={"error": {"message": "bad speaker"}})
+
+    tts = SarvamTTS(api_key="k", retry_backoff_s=0.0)
+    tts._http = _stub(handler)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        [c async for c in tts.stream("नमस्ते")]
+    assert attempts == 1
+
+
+async def test_retry_after_is_honoured_when_the_vendor_sends_one(monkeypatch):
+    """Sarvam may say how long to wait. Ignoring it and retrying sooner is how a
+    caller turns one rate-limited request into three."""
+    slept: list[float] = []
+
+    async def fake_sleep(s: float) -> None:
+        slept.append(s)
+
+    monkeypatch.setattr("vaani.providers.tts.sarvam.asyncio.sleep", fake_sleep)
+
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(429, headers={"Retry-After": "2"}, json={})
+        return httpx.Response(200, content=_pcm(10))
+
+    tts = SarvamTTS(api_key="k")
+    tts._http = _stub(handler)
+    [c async for c in tts.stream("नमस्ते")]
+
+    assert slept and slept[0] == pytest.approx(2.0)

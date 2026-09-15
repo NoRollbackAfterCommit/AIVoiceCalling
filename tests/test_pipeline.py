@@ -519,6 +519,60 @@ async def test_noise_before_a_reply_is_audible_does_not_cancel_it(services):
     await asyncio.wait_for(task, timeout=5)
 
 
+class _FailingTTS:
+    """Synthesis that always fails, as Sarvam's endpoint does under a rate limit."""
+
+    name = "failing"
+
+    async def start(self) -> None: ...
+
+    async def synthesize(self, text: str, *, voice: str | None = None) -> bytes:
+        raise RuntimeError("429 Too Many Requests")
+
+    async def stream(self, text: str, *, voice: str | None = None):
+        raise RuntimeError("429 Too Many Requests")
+        yield b""  # pragma: no cover - unreachable, makes this an async generator
+
+    async def close(self) -> None: ...
+
+
+async def test_a_reply_that_produced_no_audio_is_announced_not_just_logged(services):
+    """A caller on a live line hearing nothing must be visible to a supervisor.
+
+    Fifty simultaneous calls in production drew twenty-one 429s from Sarvam, and
+    each one left a caller holding a connected line in silence. The provider now
+    retries, but a limit that outlasts the retries still ends here, and a log
+    line nobody is tailing is not a signal. The console reads this event.
+    """
+    transport = FakeTransport()
+    session = CallSession(transport, services)
+    services.tts = _FailingTTS()
+    task = asyncio.create_task(session.run())
+
+    assert await _settle(lambda: bool(transport.of_type("reply_silent"))), (
+        "a reply that reached the caller as silence was never announced"
+    )
+    event = transport.of_type("reply_silent")[0]
+    assert event["chars"] > 0, "the event must say how much speech was lost"
+
+    await session.hangup()
+    await asyncio.wait_for(task, timeout=5)
+
+
+async def test_a_reply_that_was_heard_is_not_announced_as_silent(services):
+    """The signal is worthless if every normal turn trips it."""
+    transport = FakeTransport()
+    session = CallSession(transport, services)
+    task = asyncio.create_task(session.run())
+
+    assert await _settle(lambda: session.state == CallState.LISTENING), "greeting never finished"
+    assert transport.audio, "the greeting produced no audio at all"
+    assert not transport.of_type("reply_silent")
+
+    await session.hangup()
+    await asyncio.wait_for(task, timeout=5)
+
+
 async def test_agent_audio_is_paced_to_real_time(services):
     """The session must not dump a whole utterance instantly."""
     transport = FakeTransport()

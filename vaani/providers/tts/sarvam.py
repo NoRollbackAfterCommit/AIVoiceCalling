@@ -23,6 +23,7 @@ takes `text` rather than `inputs`, and `language_code` rather than
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -30,6 +31,15 @@ from vaani.config import SAMPLE_RATE
 from vaani.core.logging import get_logger
 
 log = get_logger(__name__)
+
+# One attempt plus two retries. Measured against production on 2026-09-15:
+# fifty simultaneous calls drew twenty-one 429s from this endpoint, and each one
+# became a caller holding a live line in silence — the session logs "no audio
+# produced for a reply" and moves on. Thirty concurrent calls was clean, so the
+# burst that breaks it is short, and riding it out costs under a second.
+# Bounded, because a caller listening to dead air is worse than a turn that
+# fails and recovers.
+_MAX_ATTEMPTS = 3
 
 
 class SarvamTTS:
@@ -43,7 +53,9 @@ class SarvamTTS:
         base_url: str = "https://api.sarvam.ai",
         speed: float = 1.0,
         timeout_s: float = 30.0,
+        retry_backoff_s: float = 0.25,
     ) -> None:
+        self._retry_backoff = retry_backoff_s
         self._api_key = api_key
         self._model = model
         self._default_voice = default_voice
@@ -84,14 +96,32 @@ class SarvamTTS:
             "output_audio_codec": "linear16",
         }
 
-        async with self._http.stream("POST", "/text-to-speech/stream", json=payload) as response:
-            if response.status_code != 200:
-                # The body has to be read before the message is useful, and a
-                # silent empty turn would hide a bad speaker or language code.
-                await response.aread()
-                response.raise_for_status()
-            async for chunk in _aligned(response.aiter_bytes()):
-                yield chunk
+        for attempt in range(_MAX_ATTEMPTS):
+            async with self._http.stream(
+                "POST", "/text-to-speech/stream", json=payload
+            ) as response:
+                # Only the rate limit is worth retrying: a 400 from a bad speaker
+                # fails identically every time, and retrying it spends the
+                # caller's silence on a certainty.
+                if response.status_code == 429 and attempt < _MAX_ATTEMPTS - 1:
+                    await response.aread()
+                    wait = _retry_after(response)
+                    if wait is None:
+                        wait = self._retry_backoff * (2**attempt)
+                    log.warning(
+                        "sarvam tts rate limited; retrying",
+                        extra={"attempt": attempt + 1, "wait_s": round(wait, 2)},
+                    )
+                    await asyncio.sleep(wait)
+                    continue
+                if response.status_code != 200:
+                    # The body has to be read before the message is useful, and a
+                    # silent empty turn would hide a bad speaker or language code.
+                    await response.aread()
+                    response.raise_for_status()
+                async for chunk in _aligned(response.aiter_bytes()):
+                    yield chunk
+                return
 
     async def synthesize(self, text: str, *, voice: str | None = None) -> bytes:
         """Whole utterance at once. Correct, but it forfeits the latency win —
@@ -125,6 +155,26 @@ async def _aligned(source: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
     # second; emitting it would click.
     if carry:
         log.debug("dropped a trailing half sample", extra={"bytes": len(carry)})
+
+
+def _retry_after(response: Any) -> float | None:
+    """Seconds the vendor asked us to wait, if it said.
+
+    Ignoring a `Retry-After` and retrying sooner is how one rate-limited request
+    becomes three. Only the delta-seconds form is honoured; the HTTP-date form is
+    treated as absent rather than parsed, because a clock skew between us and the
+    vendor would turn it into an unbounded wait on a live call.
+    """
+    raw = response.headers.get("retry-after")
+    if not raw:
+        return None
+    try:
+        seconds = float(raw.strip())
+    except (TypeError, ValueError):
+        return None
+    # A limiter asking for longer than the caller will wait is a refusal, not a
+    # delay; fall back to our own backoff and let the attempts run out.
+    return seconds if 0 <= seconds <= 5 else None
 
 
 def _split_voice(voice: str) -> tuple[str, str]:
