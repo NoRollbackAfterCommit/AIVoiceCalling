@@ -34,6 +34,9 @@ class ProfileRepository:
                 AgentProfileRow(
                     key=profile.key,
                     payload=json.dumps(profile_to_dict(profile)),
+                    # Mirrored into its own column as well as the payload: the
+                    # column is what a report can join on without parsing JSON.
+                    organisation_id=profile.organisation_id,
                     updated_at=time.time(),
                 )
             )

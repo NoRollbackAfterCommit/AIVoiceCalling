@@ -15,6 +15,7 @@ from fastapi import APIRouter, Body, File, HTTPException, Query, Request, Upload
 from pydantic import BaseModel, Field
 
 from vaani.agent.prompt import AgentProfile, profile_to_dict, render_system_prompt
+from vaani.api.scope import ensure_visible, is_unrestricted, visible_organisation
 from vaani.core.logging import get_logger
 
 log = get_logger(__name__)
@@ -90,9 +91,24 @@ class AgentProfileIn(BaseModel):
     max_tool_iterations: int = Field(default=_DEFAULTS.max_tool_iterations, ge=1, le=8)
 
 
+def _owned_agent(request: Request, key: str) -> AgentProfile:
+    """The profile, or 404 if it belongs to another organisation.
+
+    404 rather than 403 throughout: telling somebody that an agent exists but is
+    forbidden discloses that the organisation is a customer and what its agents
+    are called.
+    """
+    profile = request.app.state.services.profiles.get(key)
+    if profile is None:
+        raise HTTPException(404, f"No agent profile {key!r}")
+    ensure_visible(request, getattr(profile, "organisation_id", None), "agent profile")
+    return profile
+
+
 @router.get("/agents", tags=["agents"])
 async def list_agents(request: Request) -> list[dict[str, Any]]:
     profiles = request.app.state.services.profiles
+    mine = visible_organisation(request)
     return [
         {
             "key": p.key,
@@ -102,20 +118,28 @@ async def list_agents(request: Request) -> list[dict[str, Any]]:
             "tools": p.tools,
         }
         for p in profiles.values()
+        if mine is None or getattr(p, "organisation_id", None) == mine
     ]
 
 
 @router.get("/agents/{key}", tags=["agents"])
 async def get_agent(key: str, request: Request) -> dict[str, Any]:
-    profile = request.app.state.services.profiles.get(key)
-    if profile is None:
-        raise HTTPException(404, f"No agent profile {key!r}")
+    profile = _owned_agent(request, key)
     return {**profile_to_dict(profile), "system_prompt": render_system_prompt(profile)}
 
 
 @router.put("/agents/{key}", tags=["agents"])
 async def upsert_agent(key: str, body: AgentProfileIn, request: Request) -> dict[str, Any]:
     services = request.app.state.services
+    existing = services.profiles.get(key)
+    if existing is not None:
+        # Editing somebody else's agent rewrites what their bot says out loud.
+        _owned_agent(request, key)
+    owner = (
+        getattr(existing, "organisation_id", None)
+        if existing is not None
+        else visible_organisation(request)
+    )
     known = set(services.tools.names())
     unknown = [t for t in body.tools if t not in known]
     if unknown:
@@ -123,6 +147,10 @@ async def upsert_agent(key: str, body: AgentProfileIn, request: Request) -> dict
 
     fields = body.model_dump(exclude_none=True)
     fields["key"] = key
+    # Ownership is never taken from the request body: an org admin creating an
+    # agent gets their own organisation, and an existing one keeps the owner it
+    # already had.
+    fields["organisation_id"] = owner
     profile = AgentProfile(**fields)
     # Persist before applying, so a database failure surfaces as a failed save
     # rather than a profile that works until the next restart.
@@ -137,6 +165,7 @@ async def upsert_agent(key: str, body: AgentProfileIn, request: Request) -> dict
 async def delete_agent(key: str, request: Request) -> dict[str, str]:
     if key == "default":
         raise HTTPException(400, "The default profile cannot be deleted")
+    _owned_agent(request, key)
     services = request.app.state.services
     if services.profile_store is not None:
         await services.profile_store.delete(key)
@@ -178,7 +207,10 @@ def _tenancy(request: Request) -> Any:
 
 @router.get("/organisations", tags=["tenancy"])
 async def list_organisations(request: Request) -> list[dict[str, Any]]:
-    return [asdict(o) for o in await _tenancy(request).organisations()]
+    mine = visible_organisation(request)
+    return [
+        asdict(o) for o in await _tenancy(request).organisations() if mine is None or o.id == mine
+    ]
 
 
 @router.post("/organisations", tags=["tenancy"], status_code=201)
@@ -199,6 +231,7 @@ async def update_organisation(
     store = _tenancy(request)
     if await store.organisation(organisation_id) is None:
         raise HTTPException(404, f"No organisation {organisation_id}")
+    ensure_visible(request, organisation_id, "organisation")
     if body.name is not None:
         await store.rename_organisation(organisation_id, body.name)
     if body.active is not None:
@@ -217,7 +250,9 @@ async def update_organisation(
 async def list_dids(
     request: Request, organisation_id: int | None = Query(default=None)
 ) -> list[dict[str, Any]]:
-    return await _tenancy(request).dids_with_organisation(organisation_id)
+    return await _tenancy(request).dids_with_organisation(
+        visible_organisation(request, organisation_id)
+    )
 
 
 @router.put("/dids/{number}", tags=["tenancy"])
@@ -271,6 +306,9 @@ class TextIngest(BaseModel):
 
 @router.post("/knowledge/text", tags=["knowledge"])
 async def ingest_text(body: TextIngest, request: Request) -> dict[str, Any]:
+    # Writing into another organisation's corpus is putting words in their
+    # bot's mouth, so the agent is checked before a single chunk is embedded.
+    _owned_agent(request, body.agent_key)
     retriever = request.app.state.services.retriever
     count = await retriever.index_text(
         body.text, source=body.source, agent_key=body.agent_key, metadata=body.metadata
@@ -287,6 +325,7 @@ async def ingest_file(
     import tempfile
     from pathlib import Path
 
+    _owned_agent(request, agent_key)
     suffix = Path(file.filename or "upload.txt").suffix or ".txt"
     raw = await file.read()
     if len(raw) > 64 * 1024 * 1024:
@@ -318,6 +357,7 @@ async def search_knowledge(
 ) -> dict[str, Any]:
     """Exposed so operators can test retrieval quality without placing a call —
     the fastest way to diagnose 'the agent gave a wrong answer'."""
+    _owned_agent(request, agent_key)
     hits = await request.app.state.services.retriever.search(q, agent_key=agent_key, top_k=top_k)
     return {
         "query": q,
@@ -332,6 +372,7 @@ async def search_knowledge(
 async def delete_source(
     source: str, request: Request, agent_key: str = "default"
 ) -> dict[str, Any]:
+    _owned_agent(request, agent_key)
     removed = await request.app.state.services.retriever.delete_source(source, agent_key=agent_key)
     return {"source": source, "removed_chunks": removed}
 
@@ -339,14 +380,31 @@ async def delete_source(
 @router.get("/knowledge/sources", tags=["knowledge"])
 async def knowledge_sources(request: Request, agent_key: str = "default") -> list[dict[str, Any]]:
     """What is actually indexed, so an operator is not uploading blind."""
+    _owned_agent(request, agent_key)
     pairs = await request.app.state.services.retriever.sources(agent_key=agent_key)
     return [{"source": source, "chunks": chunks} for source, chunks in pairs]
 
 
 @router.get("/knowledge/stats", tags=["knowledge"])
 async def knowledge_stats(request: Request, agent_key: str | None = None) -> dict[str, Any]:
+    if agent_key is not None:
+        _owned_agent(request, agent_key)
+    elif not is_unrestricted(request):
+        # A total across every organisation is a platform figure, not a
+        # customer's. Narrow it to their own rather than refusing outright.
+        return await _own_knowledge_total(request)
     count = await request.app.state.services.retriever.count(agent_key)
     return {"agent_key": agent_key, "chunks": count}
+
+
+async def _own_knowledge_total(request: Request) -> dict[str, Any]:
+    retriever = request.app.state.services.retriever
+    mine = visible_organisation(request)
+    total = 0
+    for profile in request.app.state.services.profiles.values():
+        if getattr(profile, "organisation_id", None) == mine:
+            total += await retriever.count(profile.key)
+    return {"agent_key": None, "chunks": total}
 
 
 # ---------------------------------------------------------------------------
@@ -356,19 +414,27 @@ async def knowledge_stats(request: Request, agent_key: str | None = None) -> dic
 
 @router.get("/calls/live", tags=["calls"])
 async def live_calls(request: Request) -> list[dict[str, Any]]:
-    return request.app.state.calls.live()
+    return request.app.state.calls.live(visible_organisation(request))
 
 
 @router.get("/calls", tags=["calls"])
 async def call_history(
-    request: Request, limit: int = Query(50, ge=1, le=500)
+    request: Request,
+    limit: int = Query(50, ge=1, le=500),
+    organisation_id: int | None = Query(default=None),
 ) -> list[dict[str, Any]]:
     """Served from the database when one is configured: the in-memory manager
-    only knows about calls this process handled, which is not an audit trail."""
+    only knows about calls this process handled, which is not an audit trail.
+
+    `organisation_id` narrows the view for a platform administrator. For anyone
+    else it is ignored — scope comes from who you are, not what you asked for.
+    """
+    mine = visible_organisation(request, organisation_id)
     repository = request.app.state.services.calls
     if repository is None:
-        return request.app.state.calls.history(limit)
-    return await repository.recent(limit)
+        rows = request.app.state.calls.history(limit)
+        return [r for r in rows if mine is None or r.get("organisation_id") == mine]
+    return await repository.recent(limit, mine)
 
 
 @router.get("/calls/{call_id}", tags=["calls"])
@@ -376,9 +442,11 @@ async def get_call(call_id: str, request: Request) -> dict[str, Any]:
     manager = request.app.state.calls
     session = manager.get(call_id)
     if session is not None:
+        ensure_visible(request, session.record.organisation_id, "call")
         return session.record.to_dict()
     for record in manager.history(500):
         if record["call_id"] == call_id:
+            ensure_visible(request, record.get("organisation_id"), "call")
             return record
     # Memory holds only what this process handled, which is why the history
     # endpoint above reads the database. This one must too, or every call that
@@ -388,6 +456,7 @@ async def get_call(call_id: str, request: Request) -> dict[str, Any]:
     if repository is not None:
         stored = await repository.get_call(call_id)
         if stored is not None:
+            ensure_visible(request, stored.get("organisation_id"), "call")
             stored["turns"] = await repository.turns_for(call_id)
             return stored
     raise HTTPException(404, f"No call {call_id!r}")
@@ -395,7 +464,14 @@ async def get_call(call_id: str, request: Request) -> dict[str, Any]:
 
 @router.post("/calls/{call_id}/hangup", tags=["calls"])
 async def hangup_call(call_id: str, request: Request) -> dict[str, str]:
-    if not await request.app.state.calls.hangup(call_id):
+    manager = request.app.state.calls
+    session = manager.get(call_id)
+    if session is None:
+        raise HTTPException(404, f"No live call {call_id!r}")
+    # Checked before the hang-up, not after: ending a stranger's call and then
+    # reporting it forbidden would be the worst of both.
+    ensure_visible(request, session.record.organisation_id, "live call")
+    if not await manager.hangup(call_id):
         raise HTTPException(404, f"No live call {call_id!r}")
     return {"status": "ended"}
 
@@ -403,13 +479,23 @@ async def hangup_call(call_id: str, request: Request) -> dict[str, str]:
 @router.get("/analytics/summary", tags=["analytics"])
 async def analytics(request: Request) -> dict[str, Any]:
     manager = request.app.state.calls
+    mine = visible_organisation(request)
     stats = manager.stats()
+    # Deployment-wide figures belong to the platform. A customer sees how many
+    # of the lines are theirs, not how busy the box is.
+    if mine is not None:
+        own_live = manager.live(mine)
+        stats = {**stats, "live": len(own_live)}
+        stats.pop("capacity", None)
+        stats.pop("total_calls", None)
 
     # Knowledge-gap mining: the questions that produced no useful retrieval are
     # the highest-value input to the next round of content authoring.
     languages: dict[str, int] = {}
     unresolved: list[str] = []
     for record in manager.history(200):
+        if mine is not None and record.get("organisation_id") != mine:
+            continue
         for lang in record.get("languages", []):
             languages[lang] = languages.get(lang, 0) + 1
         for turn in record.get("turns", []):

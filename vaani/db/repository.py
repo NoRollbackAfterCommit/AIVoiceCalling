@@ -136,24 +136,29 @@ class CallRepository:
             )
             return [_as_dict(row) for row in result.scalars()]
 
-    async def recent(self, limit: int = 50) -> list[dict[str, Any]]:
+    async def recent(
+        self, limit: int = 50, organisation_id: int | None = None
+    ) -> list[dict[str, Any]]:
+        """Filtered in SQL rather than after the fetch: filtering a page of
+        fifty afterwards returns fewer than fifty rows to whoever owns the
+        fewest calls, which reads as data loss."""
         async with self._sessions() as session:
-            result = await session.execute(
-                select(CallRow).order_by(CallRow.started_at.desc()).limit(limit)
-            )
+            stmt = select(CallRow).order_by(CallRow.started_at.desc())
+            if organisation_id is not None:
+                stmt = stmt.where(CallRow.organisation_id == organisation_id)
+            result = await session.execute(stmt.limit(limit))
             return [_as_dict(row) for row in result.scalars()]
 
-    async def disposition_counts(self) -> dict[str, int]:
+    async def disposition_counts(self, organisation_id: int | None = None) -> dict[str, int]:
         """What calls actually achieved, in aggregate. This is the reason the
         vocabulary is closed rather than free text."""
         from sqlalchemy import func
 
         async with self._sessions() as session:
-            result = await session.execute(
-                select(CallRow.disposition, func.count())
-                .where(CallRow.disposition.is_not(None))
-                .group_by(CallRow.disposition)
-            )
+            stmt = select(CallRow.disposition, func.count()).where(CallRow.disposition.is_not(None))
+            if organisation_id is not None:
+                stmt = stmt.where(CallRow.organisation_id == organisation_id)
+            result = await session.execute(stmt.group_by(CallRow.disposition))
             return {row[0]: row[1] for row in result}
 
     async def purge_older_than(self, days: int) -> int:

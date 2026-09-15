@@ -22,7 +22,15 @@ from typing import Any
 class AgentProfile:
     key: str
     name: str = "Assistant"
+    # What the bot says out loud — "you are the voice assistant for …". Operator
+    # copy, edited freely.
     organisation: str = "the organisation"
+    # Who owns this profile. Different from the line above and deliberately so:
+    # this decides who may edit it and whose reports its calls appear in, and
+    # renaming the spoken copy must not silently re-home a customer's data.
+    # None means it predates tenancy, or belongs to a bare install with no
+    # database; such a profile is visible only to a platform administrator.
+    organisation_id: int | None = None
     # What the agent is for, in one or two sentences.
     role: str = "Answer caller questions accurately and help them complete tasks."
     languages: list[str] = field(default_factory=lambda: ["English"])

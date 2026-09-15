@@ -103,6 +103,9 @@ class AgentProfileRow(Base):
     # gains a field most releases, it is read whole and never queried by field,
     # and a column each would mean a migration each.
     payload: Mapped[str] = mapped_column(Text)
+    # Mirrored out of the payload so reporting can join on it without parsing
+    # JSON. NULL for a profile that predates tenancy or a bare install.
+    organisation_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     updated_at: Mapped[float] = mapped_column(Float)
 
 

@@ -61,7 +61,12 @@ class CallManager:
     def get(self, call_id: str) -> CallSession | None:
         return self._live.get(call_id)
 
-    def live(self) -> list[dict[str, Any]]:
+    def live(self, organisation_id: int | None = None) -> list[dict[str, Any]]:
+        """Live calls, optionally only one organisation's.
+
+        None means every organisation, which is what a platform administrator
+        and the shared machine token get.
+        """
         return [
             {
                 "call_id": s.call_id,
@@ -78,6 +83,7 @@ class CallManager:
                 "turns": len(s.record.turns),
             }
             for s in self._live.values()
+            if organisation_id is None or s.record.organisation_id == organisation_id
         ]
 
     def history(self, limit: int = 50) -> list[dict[str, Any]]:

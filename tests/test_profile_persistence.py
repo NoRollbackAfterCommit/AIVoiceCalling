@@ -135,13 +135,32 @@ def test_a_phase_3_database_gains_the_profiles_table(tmp_path):
 # -- API ---------------------------------------------------------------------
 
 
+# Everything a caller may set. `organisation_id` is deliberately absent: it
+# decides who owns the profile, and a field the body could set is one an org
+# admin could use to hand their agent — and its calls and corpus — to another
+# organisation, or to claim one of theirs. The endpoint fills it from the
+# authenticated user instead, which is why it is excluded here rather than
+# added to the model.
+_SERVER_OWNED = {"organisation_id"}
+
+
 def test_the_api_input_model_covers_every_profile_field():
     """The request model is a hand-written mirror of the dataclass. When they
     drift, a save silently resets the fields the model forgot — which is how
     voices and the outcome tools were being wiped."""
     from vaani.api.routes import AgentProfileIn
 
-    assert set(AgentProfileIn.model_fields) == {f.name for f in fields(AgentProfile)}
+    expected = {f.name for f in fields(AgentProfile)} - _SERVER_OWNED
+    assert set(AgentProfileIn.model_fields) == expected
+
+
+async def test_an_agents_owner_cannot_be_set_from_the_request_body(services, store):
+    """The guard against an org admin re-homing an agent by hand."""
+    from vaani.api.routes import AgentProfileIn
+
+    assert "organisation_id" not in AgentProfileIn.model_fields
+    body = AgentProfileIn(key="x", organisation_id=999)  # type: ignore[call-arg]
+    assert not hasattr(body, "organisation_id")
 
 
 def _client(services):
