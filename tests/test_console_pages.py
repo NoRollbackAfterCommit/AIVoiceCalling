@@ -27,6 +27,7 @@ PAGES = [
     ("/reports", 'id="figures"'),
     ("/knowledge", 'id="drop"'),
     ("/settings", 'id="dirty"'),
+    ("/agents", 'id="editor"'),
 ]
 
 
@@ -105,3 +106,52 @@ def test_every_console_page_loads_the_auth_helper():
         if page.name == "login.html":
             continue  # the one page that must work without a session
         assert "/static/auth.js" in page.read_text(encoding="utf-8"), page.name
+
+
+# -- the agent editor --------------------------------------------------------
+
+
+def _static(name: str) -> str:
+    from pathlib import Path
+
+    import vaani
+
+    return (Path(vaani.__file__).parent / "web" / "static" / name).read_text(encoding="utf-8")
+
+
+def test_the_agent_editor_reads_and_writes_the_agents_api():
+    """Until this page, creating the agent that answers a line was the one setup
+    step an operator could not do: it needed the API token, which means it
+    needed an engineer. Four calls carry the page — two to show anything, one to
+    save, and one so the form can only offer tools the server will accept."""
+    page = _static("agents.html")
+    assert '"/api/agents"' in page, "without the list the page has nothing to show"
+    assert '"/api/agents/"' in page, "one agent must load into the form to be edited"
+    assert '"PUT"' in page, "a form that cannot save is decoration"
+    assert '"/api/tools"' in page, "PUT refuses an unknown tool name outright"
+
+
+def test_a_new_agent_starts_from_the_servers_defaults_not_from_a_blank_form():
+    """Caught in a browser before this was pinned: a new agent saved straight
+    from an empty form stored `tools: []`, because a posted blank overrides the
+    default it was meant to inherit. That agent could not search its own
+    documents, could not transfer, and — end_call not running without
+    set_disposition — could never hang up.
+    """
+    assert "/api/agent-defaults" in _static("agents.html")
+
+
+def test_the_agent_key_cannot_be_edited_once_it_exists():
+    """Knowledge is namespaced by agent key, so renaming one leaves its whole
+    corpus addressed to a key nothing answers to. The agent would silently
+    forget everything it had been taught, with no error raised anywhere."""
+    assert "readOnly" in _static("agents.html")
+
+
+def test_the_console_links_to_the_agent_editor_for_those_who_may_use_it():
+    """A page nothing links to is a page nobody finds. The roles on the link
+    must match the server's own rule for writes to /api/agents, or the console
+    offers somebody a page that refuses them."""
+    links = [ln for ln in _static("index.html").splitlines() if 'href="/agents"' in ln]
+    assert links, "the console must link to the agent editor"
+    assert 'data-roles="platform_admin,org_admin"' in links[0]

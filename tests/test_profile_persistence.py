@@ -220,3 +220,59 @@ async def test_saving_works_with_no_store_attached(services):
         resp = await client.put("/api/agents/demo", json={"key": "demo", "name": "Demo"})
     assert resp.status_code == 200, resp.text
     assert services.profiles["demo"].name == "Demo"
+
+
+async def test_reading_a_profile_and_writing_it_straight_back_changes_nothing(services, store):
+    """What the agent editor in the console does on every save.
+
+    PUT replaces the whole profile, so the page cannot send only the fields it
+    draws — it merges the form over the profile the server gave it. That is only
+    safe while a GET body is accepted verbatim by PUT. If the two shapes ever
+    drift, the editor starts quietly resetting whatever GET returns and PUT
+    ignores, which is precisely how voices and the outcome tools were wiped once
+    before.
+    """
+    services.profile_store = store
+    services.profiles["pension"] = TUNED
+    async with _client(services) as client:
+        before = (await client.get("/api/agents/pension")).json()
+        sent = {k: v for k, v in before.items() if k != "system_prompt"}
+        assert (await client.put("/api/agents/pension", json=sent)).status_code == 200
+        after = (await client.get("/api/agents/pension")).json()
+
+    drifted = {k: (before[k], after.get(k)) for k in before if before[k] != after.get(k)}
+    assert not drifted, f"a round trip through the editor would change {drifted}"
+
+
+async def test_the_api_says_what_a_new_agent_starts_as(services):
+    """The console draws a blank form for a new agent and then posts it. Without
+    somewhere to read the starting values from, every field left alone is posted
+    empty and turns its default off — which produced an agent with `tools: []`:
+    one that could not search its own documents, could not transfer, and could
+    not hang up.
+
+    The endpoint sits outside the /api/agents prefix deliberately. Under it, the
+    path would have to be registered ahead of /agents/{key} to avoid being
+    swallowed as a key, and that is an ordering dependency nothing would catch
+    when somebody reorders the file.
+    """
+    async with _client(services) as client:
+        resp = await client.get("/api/agent-defaults")
+
+    assert resp.status_code == 200, resp.text
+    starting = resp.json()
+    assert starting["key"] == "", "a new agent has no key until the operator names one"
+    assert {"set_disposition", "end_call"} <= set(starting["tools"]), (
+        "end_call will not run without set_disposition; an agent starting "
+        "without both is one that can never end a call"
+    )
+    assert starting["closing"], "a call that just stops is a call that sounds dropped"
+
+    # Every field the form has to draw must be here, or it falls back to a blank.
+    assert set(starting) >= set(AgentProfileIn_fields()), "the form would draw blanks"
+
+
+def AgentProfileIn_fields():
+    from vaani.api.routes import AgentProfileIn
+
+    return set(AgentProfileIn.model_fields)

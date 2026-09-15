@@ -1,0 +1,540 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Vaani — Agents</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --line: #30363d;
+    --fg: #e6edf3; --dim: #8b949e;
+    --accent: #2f81f7; --ok: #3fb950; --warn: #d29922; --err: #f85149;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f6f8fa; --panel:#fff; --line:#d8dee4; --fg:#1f2328; --dim:#656d76; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    padding: 16px 24px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  }
+  h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  .tag {
+    font-size: 12px; color: var(--dim); border: 1px solid var(--line);
+    padding: 2px 8px; border-radius: 999px;
+  }
+  header a { color: var(--accent); text-decoration: none; font-size: 13px; }
+  main { display: grid; grid-template-columns: 280px 1fr; gap: 20px; padding: 20px 24px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .panel h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--dim); margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .panel h2 button { margin-left: auto; }
+  .note { font-size: 12px; color: var(--dim); padding: 14px 16px; margin: 0; }
+  .row {
+    padding: 11px 16px; border-bottom: 1px solid var(--line); cursor: pointer;
+    display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap;
+  }
+  .row:hover { background: rgba(127,127,127,.08); }
+  .row.on { box-shadow: inset 3px 0 0 var(--accent); }
+  .row .name { font-weight: 600; }
+  .row .sub { font-size: 12px; color: var(--dim); width: 100%; }
+  fieldset { border: 0; border-top: 1px solid var(--line); margin: 0; padding: 16px; }
+  fieldset:first-of-type { border-top: 0; }
+  legend {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--dim); padding: 0 8px 0 0;
+  }
+  .field { margin-bottom: 12px; }
+  .field:last-child { margin-bottom: 0; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 700px) { .pair { grid-template-columns: 1fr; } }
+  label { font-size: 12px; color: var(--dim); display: block; margin-bottom: 3px; }
+  .hint { font-size: 11px; color: var(--dim); margin: 4px 0 0; }
+  input, select, textarea {
+    font: inherit; width: 100%; padding: 8px 10px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--fg);
+  }
+  textarea { min-height: 76px; resize: vertical; line-height: 1.45; }
+  input[readonly] { color: var(--dim); cursor: not-allowed; }
+  .check { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 8px; }
+  .check input { width: auto; margin-top: 3px; }
+  .check label { color: var(--fg); margin: 0; font-size: 13px; }
+  .check .hint { margin: 1px 0 0; }
+  .voice { display: grid; grid-template-columns: 150px 1fr auto; gap: 8px; margin-bottom: 8px; }
+  button {
+    font: inherit; font-weight: 600; padding: 9px 18px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--fg); cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.small { padding: 4px 10px; font-size: 12px; font-weight: 500; }
+  .actions {
+    padding: 16px; border-top: 1px solid var(--line); display: flex; gap: 12px;
+    align-items: center; flex-wrap: wrap;
+  }
+  details { padding: 0 16px 16px; }
+  summary { font-size: 12px; color: var(--dim); cursor: pointer; }
+  pre {
+    white-space: pre-wrap; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+    background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px; margin: 10px 0 0; max-height: 340px; overflow: auto;
+  }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #toast {
+    position: fixed; right: 20px; bottom: 20px; padding: 10px 16px; border-radius: 8px;
+    background: var(--panel); border: 1px solid var(--line); font-size: 13px;
+  }
+  #toast.bad { border-color: var(--err); color: var(--err); }
+</style>
+<script src="/static/auth.js"></script>
+</head>
+<body>
+<header>
+  <h1>Vaani</h1>
+  <span class="tag">agents</span>
+  <a href="/" style="margin-left:auto">← Console</a>
+  <a href="/reports" style="margin-left:14px">Reports</a>
+  <a href="/calls" style="margin-left:14px">Live calls</a>
+  <a href="/organisations" style="margin-left:14px" data-roles="platform_admin">Organisations</a>
+  <a href="/users" style="margin-left:14px" data-roles="platform_admin,org_admin">People</a>
+  <a href="/knowledge" style="margin-left:14px">Knowledge</a>
+  <a href="/settings" style="margin-left:14px" data-roles="platform_admin">Settings</a>
+</header>
+
+<main>
+  <div class="panel">
+    <h2>Agents <button class="small" id="new" type="button">New</button></h2>
+    <div id="rows"></div>
+    <p class="note" id="empty" hidden>No agents yet.</p>
+  </div>
+
+  <div class="panel" id="editor">
+    <h2 id="editorTitle">Choose an agent</h2>
+    <p class="note" id="placeholder">
+      An agent is what the bot is on one line: who it says it is, what it will
+      and will not answer, and the voice it answers in. Pick one on the left to
+      edit it, or start a new one.
+    </p>
+
+    <form id="form" hidden>
+      <fieldset>
+        <legend>Identity</legend>
+        <div class="pair">
+          <div class="field">
+            <label for="key">Key</label>
+            <input id="key" required maxlength="64" autocomplete="off" />
+            <p class="hint" id="keyHint">Short, lowercase, no spaces.</p>
+          </div>
+          <div class="field">
+            <label for="name">Name it gives out loud</label>
+            <input id="name" autocomplete="off" />
+          </div>
+        </div>
+        <div class="field">
+          <label for="organisation">Organisation it says it speaks for</label>
+          <input id="organisation" autocomplete="off" />
+          <p class="hint">Said aloud, so write it as speech: "the Health University".</p>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>What this line is for</legend>
+        <div class="field">
+          <label for="role">Role</label>
+          <textarea id="role"></textarea>
+        </div>
+        <div class="field">
+          <label for="objective">Objective (optional)</label>
+          <input id="objective" autocomplete="off" />
+          <p class="hint">One thing every call should try to reach, if there is one.</p>
+        </div>
+        <div class="field">
+          <label for="knowledge_guidelines">How to use the uploaded documents (optional)</label>
+          <textarea id="knowledge_guidelines"></textarea>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>What the caller hears</legend>
+        <div class="field">
+          <label for="greeting">Greeting</label>
+          <textarea id="greeting"></textarea>
+        </div>
+        <div class="field">
+          <label for="closing">Closing</label>
+          <textarea id="closing"></textarea>
+        </div>
+        <div class="field">
+          <label for="tone">Tone</label>
+          <input id="tone" autocomplete="off" />
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Languages and voices</legend>
+        <div class="field">
+          <label for="languages">Languages it will speak</label>
+          <input id="languages" autocomplete="off" />
+          <p class="hint">Names, comma separated — English, Hindi, Bengali.</p>
+        </div>
+        <div class="field">
+          <label>Voice per language</label>
+          <div id="voices"></div>
+          <button class="small" id="addVoice" type="button">Add a language</button>
+          <p class="hint">
+            The first row is the language a call starts in, and a caller can only
+            be moved into a language listed here. bulbul:v3 takes priya, ritu,
+            aditya, neha, rahul and others, and refuses a speaker it does not know.
+          </p>
+        </div>
+        <div class="check">
+          <input id="ask_language" type="checkbox" />
+          <div>
+            <label for="ask_language">Ask the caller which language they want</label>
+            <p class="hint">Off means every call starts in the first language above.</p>
+          </div>
+        </div>
+        <div class="field">
+          <label for="language_prompt">How it asks</label>
+          <input id="language_prompt" autocomplete="off" />
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Rules</legend>
+        <div class="field">
+          <label for="policies">Policies — one per line</label>
+          <textarea id="policies"></textarea>
+          <p class="hint">
+            Hours, eligibility, fees, deadlines. Write them as you would tell a
+            new member of staff.
+          </p>
+        </div>
+        <div class="field">
+          <label for="forbidden_topics">Will not discuss — one per line</label>
+          <textarea id="forbidden_topics"></textarea>
+        </div>
+        <div class="field">
+          <label for="escalation_rules">Hand to a person when — one per line</label>
+          <textarea id="escalation_rules"></textarea>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Tools</legend>
+        <div id="tools"></div>
+        <p class="hint" id="noTools" hidden>No tools are installed on this deployment.</p>
+      </fieldset>
+
+      <div class="actions">
+        <button class="primary" type="submit">Save</button>
+        <span class="hint" id="saved" style="margin:0"></span>
+      </div>
+    </form>
+
+    <details id="promptBox" hidden>
+      <summary>What the bot is actually told</summary>
+      <pre id="prompt"></pre>
+    </details>
+  </div>
+</main>
+
+<div id="toast" hidden></div>
+
+<script>
+"use strict";
+
+// The seven languages the pipeline can confirm a switch into (CONFIRMATIONS in
+// vaani/pipeline/session.py). Offering anything outside this list would let an
+// operator build an agent that lists a language it can never move a caller to.
+var LANGUAGES = [
+  ["hi-IN", "Hindi"], ["bn-IN", "Bengali"], ["en-IN", "English"],
+  ["mr-IN", "Marathi"], ["gu-IN", "Gujarati"], ["pa-IN", "Punjabi"],
+  ["od-IN", "Odia"]
+];
+
+var agents = [];
+var tools = [];
+// What the server fills in for a field nobody sets. Seeds the new-agent form.
+var defaults = { key: "", voices: { "hi-IN": "hi-IN:priya" }, tools: [] };
+// The profile as the server last gave it to us. PUT replaces the whole profile
+// and this form draws most fields but not every one, so a save built from the
+// form alone would quietly reset whatever it does not show back to its default.
+// Every save is the form merged over this, so an unshown field keeps its value.
+var loaded = null;
+var current = null;
+
+function el(id) { return document.getElementById(id); }
+
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
+
+var toastTimer = null;
+function toast(message, bad) {
+  var t = el("toast");
+  t.textContent = message;
+  t.className = bad ? "bad" : "";
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { t.hidden = true; }, 4000);
+}
+
+async function send(method, url, payload) {
+  var init = { method: method, credentials: "same-origin" };
+  if (payload !== undefined) {
+    init.headers = { "Content-Type": "application/json" };
+    init.body = JSON.stringify(payload);
+  }
+  var r = await fetch(url, init);
+  if (!r.ok) {
+    var detail = "";
+    try { detail = (await r.json()).detail; } catch (e) { /* no body */ }
+    throw new Error(detail || ("HTTP " + r.status));
+  }
+  return r.json();
+}
+
+function lines(value) {
+  return String(value || "").split("\n")
+    .map(function (s) { return s.trim(); })
+    .filter(function (s) { return s.length > 0; });
+}
+
+function commas(value) {
+  return String(value || "").split(",")
+    .map(function (s) { return s.trim(); })
+    .filter(function (s) { return s.length > 0; });
+}
+
+var TEXT_FIELDS = [
+  "name", "organisation", "role", "objective", "knowledge_guidelines",
+  "greeting", "closing", "tone", "language_prompt"
+];
+
+// -- the list ---------------------------------------------------------------
+
+async function draw() {
+  try {
+    agents = await send("GET", "/api/agents");
+  } catch (e) {
+    toast(e.message, true);
+    return;
+  }
+  el("empty").hidden = agents.length > 0;
+  el("rows").innerHTML = agents.map(function (a) {
+    return '<div class="row' + (a.key === current ? " on" : "") +
+      '" data-key="' + esc(a.key) + '"><span class="name">' + esc(a.key) + "</span>" +
+      '<div class="sub">' + esc(a.name) + " · " + esc(a.organisation) + "</div></div>";
+  }).join("");
+}
+
+// -- voices -----------------------------------------------------------------
+
+function voiceRow(code, speaker) {
+  var options = LANGUAGES.map(function (l) {
+    return '<option value="' + l[0] + '"' + (l[0] === code ? " selected" : "") +
+      ">" + l[1] + " (" + l[0] + ")</option>";
+  }).join("");
+  var row = document.createElement("div");
+  row.className = "voice";
+  row.innerHTML = '<select class="vcode">' + options + "</select>" +
+    '<input class="vspeaker" placeholder="priya" value="' + esc(speaker || "") + '" />' +
+    '<button class="small" type="button" data-drop-voice>Remove</button>';
+  return row;
+}
+
+function drawVoices(voices) {
+  var box = el("voices");
+  box.innerHTML = "";
+  var codes = Object.keys(voices || {});
+  if (codes.length === 0) { codes = ["hi-IN"]; }
+  codes.forEach(function (code) {
+    // Stored as language:speaker. The form edits the speaker half only, because
+    // the language half is the row's own dropdown and the two must agree.
+    var value = String((voices || {})[code] || "");
+    box.appendChild(voiceRow(code, value.indexOf(":") >= 0 ? value.split(":")[1] : value));
+  });
+}
+
+function readVoices() {
+  var out = {};
+  Array.prototype.forEach.call(el("voices").querySelectorAll(".voice"), function (row) {
+    var code = row.querySelector(".vcode").value;
+    var speaker = row.querySelector(".vspeaker").value.trim();
+    if (speaker) { out[code] = code + ":" + speaker; }
+  });
+  return out;
+}
+
+// -- tools ------------------------------------------------------------------
+
+function drawTools(chosen) {
+  el("noTools").hidden = tools.length > 0;
+  el("tools").innerHTML = tools.map(function (t) {
+    var on = chosen.indexOf(t.name) >= 0;
+    return '<div class="check"><input type="checkbox" id="tool-' + esc(t.name) +
+      '" value="' + esc(t.name) + '"' + (on ? " checked" : "") +
+      ' /><div><label for="tool-' + esc(t.name) + '">' + esc(t.name) +
+      '</label><p class="hint">' + esc(t.description || "") + "</p></div></div>";
+  }).join("");
+}
+
+// -- the editor -------------------------------------------------------------
+
+function show(profile, isNew) {
+  loaded = profile;
+  el("placeholder").hidden = true;
+  el("form").hidden = false;
+  el("editorTitle").textContent = isNew ? "New agent" : profile.key;
+  el("saved").textContent = "";
+
+  // The key is the namespace every uploaded document is filed under. An agent
+  // that changed key would carry on answering from an empty corpus, with
+  // nothing anywhere to say that it had forgotten everything it was taught.
+  el("key").value = profile.key || "";
+  el("key").readOnly = !isNew;
+  el("keyHint").textContent = isNew
+    ? "Short, lowercase, no spaces. It cannot be changed afterwards."
+    : "Fixed: the uploaded documents are filed under it.";
+
+  TEXT_FIELDS.forEach(function (f) {
+    el(f).value = profile[f] == null ? "" : profile[f];
+  });
+  el("languages").value = (profile.languages || []).join(", ");
+  el("policies").value = (profile.policies || []).join("\n");
+  el("forbidden_topics").value = (profile.forbidden_topics || []).join("\n");
+  el("escalation_rules").value = (profile.escalation_rules || []).join("\n");
+  el("ask_language").checked = !!profile.ask_language;
+  drawVoices(profile.voices);
+  drawTools(profile.tools || []);
+
+  el("promptBox").hidden = !profile.system_prompt;
+  el("prompt").textContent = profile.system_prompt || "";
+}
+
+async function openAgent(key) {
+  try {
+    current = key;
+    show(await send("GET", "/api/agents/" + encodeURIComponent(key)), false);
+    await draw();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+function formBody() {
+  var ticked = [];
+  Array.prototype.forEach.call(el("tools").querySelectorAll("input:checked"), function (box) {
+    ticked.push(box.value);
+  });
+  // Keep the order the profile already had, so editing a greeting does not also
+  // show up as a change to the tools. The checkboxes are in registry order,
+  // which is rarely the order the agent was saved with.
+  var chosen = ((loaded || {}).tools || []).filter(function (t) {
+    return ticked.indexOf(t) >= 0;
+  });
+  ticked.forEach(function (t) {
+    if (chosen.indexOf(t) < 0) { chosen.push(t); }
+  });
+  var merged = {};
+  Object.keys(loaded || {}).forEach(function (k) { merged[k] = loaded[k]; });
+  delete merged.system_prompt;  // the server renders it; it is not a field
+  merged.key = el("key").value.trim();
+  TEXT_FIELDS.forEach(function (f) { merged[f] = el(f).value.trim(); });
+  merged.languages = commas(el("languages").value);
+  merged.policies = lines(el("policies").value);
+  merged.forbidden_topics = lines(el("forbidden_topics").value);
+  merged.escalation_rules = lines(el("escalation_rules").value);
+  merged.ask_language = el("ask_language").checked;
+  merged.voices = readVoices();
+  merged.tools = chosen;
+  return merged;
+}
+
+el("form").addEventListener("submit", async function (e) {
+  e.preventDefault();
+  var payload = formBody();
+  if (!payload.key) {
+    toast("An agent needs a key.", true);
+    return;
+  }
+  try {
+    await send("PUT", "/api/agents/" + encodeURIComponent(payload.key), payload);
+    // Read it back rather than keeping the payload. A new agent's unshown
+    // fields were filled in by the server, and `loaded` is what the next save
+    // merges over — so it has to be the server's copy, not our guess at it.
+    current = payload.key;
+    show(await send("GET", "/api/agents/" + encodeURIComponent(payload.key)), false);
+    el("saved").textContent = "Saved. It answers this way from the next call.";
+    await draw();
+  } catch (err) {
+    toast(err.message, true);
+  }
+});
+
+el("new").addEventListener("click", function () {
+  current = null;
+  // Seeded from what the server says a new agent starts as, never from a blank
+  // object. A blank form posts blanks, and a posted blank switches its own
+  // default off — an agent saved that way had no tools at all: it could not
+  // search its documents, could not transfer, and could not end a call.
+  show(Object.assign({}, defaults, { key: "" }), true);
+  draw();
+  el("key").focus();
+});
+
+el("addVoice").addEventListener("click", function () {
+  el("voices").appendChild(voiceRow("bn-IN", ""));
+});
+
+document.addEventListener("click", function (e) {
+  if (!e.target.closest) { return; }
+
+  var drop = e.target.closest("[data-drop-voice]");
+  if (drop) {
+    // Removing the last one would leave the agent with no language to start in.
+    if (el("voices").querySelectorAll(".voice").length > 1) {
+      drop.closest(".voice").remove();
+    } else {
+      toast("An agent needs at least one voice.", true);
+    }
+    return;
+  }
+
+  var row = e.target.closest(".row[data-key]");
+  if (row) { openAgent(row.dataset.key); }
+});
+
+async function load() {
+  // Deliberately not gated on being signed in. A zero-config deployment — the
+  // laptop demo — has no accounts at all and every call below simply succeeds;
+  // a guarded one refuses them with a 401 and auth.js turns that into a trip to
+  // the sign-in page. Bailing out on a null user broke the first of those: the
+  // list rendered empty over an API that was answering perfectly well.
+  try {
+    tools = await send("GET", "/api/tools");
+  } catch (e) {
+    tools = [];  // a deployment with none is normal; the section just stays empty
+  }
+  try {
+    defaults = await send("GET", "/api/agent-defaults");
+  } catch (e) {
+    // Keep the built-in seed. New is still usable; the server fills the rest.
+  }
+  await draw();
+}
+
+load();
+</script>
+</body>
+</html>

@@ -97,7 +97,7 @@ has no account to carry a narrower role.
 | Role | May |
 |---|---|
 | `platform_admin` | everything, across every organisation, plus deployment settings |
-| `org_admin` | their organisation: agents, knowledge, numbers, people |
+| `org_admin` | their organisation: agents, knowledge, people. Reads its numbers; only a platform admin maps one |
 | `supervisor` | their organisation's live calls, hang-up, reports |
 | `viewer` | their organisation's reports, read only |
 

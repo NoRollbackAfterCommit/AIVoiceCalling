@@ -110,6 +110,23 @@ def _owned_agent(request: Request, key: str) -> AgentProfile:
     return profile
 
 
+@router.get("/agent-defaults", tags=["agents"])
+async def agent_defaults() -> dict[str, Any]:
+    """What a new agent starts as, before anybody edits it.
+
+    The console draws a form for a new agent and then posts it, so it needs the
+    starting values to draw. Without them every field the operator leaves alone
+    is posted empty and switches its own default off — which is how an agent
+    with `tools: []` gets made: one that cannot search its documents, cannot
+    transfer, and cannot hang up.
+
+    Outside the /api/agents prefix on purpose. Under it, this would have to be
+    registered ahead of /agents/{key} or be swallowed as a key, and nothing
+    would catch that the day somebody reorders this file.
+    """
+    return {**profile_to_dict(_DEFAULTS), "key": ""}
+
+
 @router.get("/agents", tags=["agents"])
 async def list_agents(request: Request) -> list[dict[str, Any]]:
     profiles = request.app.state.services.profiles

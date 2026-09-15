@@ -25,7 +25,9 @@ Your name appears at the top right of every page. Click it to sign out.
 
 ## Setting up a new call centre
 
-Five steps, in this order. Steps 1, 2 and 5 need a platform administrator.
+Five steps, in this order. Steps 1 and 4 need a platform administrator,
+because creating a customer and assigning a phone number are the platform's
+business. An organisation administrator can do the other three.
 
 ### 1. Create the organisation
 
@@ -37,44 +39,37 @@ corrected later.
 
 ### 2. Create the agent that answers
 
-> **There is no agent editor in the portal yet.** Today an agent is created and
-> edited through the API, which in practice means asking whoever runs the
-> deployment. Everything else in this manual is a page you can use. This is the
-> largest known gap and the obvious next thing to build.
+**Agents → New**, or click an existing agent to change it.
 
 An agent is the bot's personality and rules for one line. It carries:
 
+- **Key** — a short internal name, `health-admissions`. It is chosen once and
+  fixed afterwards, because every document you upload is filed under it.
 - **Name and organisation** — what the bot calls itself out loud. "I am Vaani,
-  the voice assistant for the Health University."
+  the voice assistant for the Health University." Write them as speech.
 - **Role** — one or two sentences on what this line is for.
 - **Greeting and closing** — the first and last thing a caller hears.
 - **Languages and voices** — a voice per language, so a Bengali caller gets a
-  Bengali voice rather than an English one reading Bengali.
+  Bengali voice rather than an English one reading Bengali. The first voice is
+  the language a call starts in, and a caller can only be moved into a language
+  listed here.
 - **Policies** — the rules of this service: hours, eligibility, fees, what to
-  refuse. Write them as you would tell a new member of staff.
-- **Escalation rules** — when to stop trying and offer a human.
+  refuse. Write them as you would tell a new member of staff, one per line.
+- **Will not discuss** and **hand to a person when** — where the bot stops.
+- **Tools** — what it is allowed to do besides talk. Only the ones this
+  deployment has installed are offered.
+
+**What the bot is actually told**, at the foot of the page, shows the finished
+instruction assembled from everything above. Open it after a change you are
+unsure of; it is the fastest way to see whether a policy landed the way you
+meant it.
 
 One organisation can have several agents. A university with an admissions line
 and an examinations line should have two, because each answers from its own
 documents.
 
-The request that creates one, for whoever has API access — the full field list is
-in `AgentProfile` (`vaani/agent/prompt.py`), and anything omitted keeps its
-default:
-
-```bash
-curl -X PUT https://samparkai.demosites.co.in/api/agents/health-admissions \
-  -H "Authorization: Bearer $API_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-        "key": "health-admissions",
-        "name": "Vaani",
-        "organisation": "the Health University",
-        "greeting": "Namaste. How may I help you today?",
-        "policies": ["Admissions for 2026 close on 30 June."],
-        "voices": {"bn-IN": "bn-IN:ritu", "hi-IN": "hi-IN:priya"}
-      }'
-```
+> Changes take effect on the next call. A call already in progress finishes on
+> the agent it started with.
 
 ### 3. Teach it
 

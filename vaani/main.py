@@ -243,6 +243,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         async def reports_page() -> FileResponse:
             return FileResponse(str(static_dir / "dashboard.html"))
 
+        @app.get("/agents", include_in_schema=False)
+        async def agents_page() -> FileResponse:
+            return FileResponse(str(static_dir / "agents.html"))
+
     return app
 
 
