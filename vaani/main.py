@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -13,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from vaani.api import accounts as accounts_api
 from vaani.api import routes, ws_monitor, ws_voice
 from vaani.api import settings as settings_api
 from vaani.api import smartflo as smartflo_api
@@ -21,11 +23,13 @@ from vaani.api.auth import TokenGuard, check_api_token
 from vaani.config import Settings, get_settings
 from vaani.core.logging import configure_logging, get_logger
 from vaani.core.registry import build_services
+from vaani.db.accounts import AccountRepository
 from vaani.db.profiles import ProfileRepository
 from vaani.db.repository import CallRepository
 from vaani.db.tenancy import TenancyRepository
 from vaani.pipeline.manager import CallManager
 from vaani.pipeline.monitor import MonitorHub
+from vaani.security.sessions import SessionSigner
 from vaani.settings_store import SettingsStore
 from vaani.telephony.announce import CallAnnouncements
 
@@ -53,6 +57,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     services.calls = repository
     services.profile_store = ProfileRepository(repository.sessions)
     services.tenancy = TenancyRepository(repository.sessions)
+    services.accounts = AccountRepository(repository.sessions)
+
+    # Generated once and kept, rather than per boot: a random key each start
+    # would sign every operator out whenever the container restarted, including
+    # on a health-check restart nobody asked for. A store that cannot be written
+    # to — a pinned one in a test, a read-only mount — falls back to a key for
+    # this process, which still works and only costs sessions on restart.
+    signing_key = getattr(settings, "session_secret", None)
+    if not signing_key:
+        signing_key = secrets.token_urlsafe(32)
+        try:
+            store.update({"session_secret": signing_key})
+            settings = store.settings
+            app.state.settings = settings
+            log.info("generated a session signing key")
+        except Exception:
+            log.warning(
+                "could not persist a session signing key; sessions will not survive a restart"
+            )
+    app.state.session_signer = SessionSigner(signing_key)
     # Saved profiles over the built-in default, the way persisted settings layer
     # over the environment: what boots is what the operator last saved.
     services.profiles.update(await services.profile_store.load())
@@ -152,6 +176,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = settings
+    # A signer always exists, so an app built without the lifespan — every test,
+    # and anything embedding this app — can still issue and check sessions. The
+    # lifespan replaces it with the persisted key, which is the one that
+    # survives a restart.
+    app.state.session_signer = SessionSigner(
+        getattr(settings, "session_secret", None) or secrets.token_urlsafe(32)
+    )
 
     # Added before CORS so that CORS is the outer layer: a preflight OPTIONS
     # carries no Authorization header and must be answered, not refused.
@@ -165,6 +196,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     app.include_router(routes.router, prefix="/api")
+    app.include_router(accounts_api.router, prefix="/api")
     app.include_router(settings_api.router, prefix="/api")
     app.include_router(telephony_api.router, prefix="/api")
     app.include_router(smartflo_api.router, prefix="/api")
@@ -196,6 +228,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         @app.get("/organisations", include_in_schema=False)
         async def organisations_page() -> FileResponse:
             return FileResponse(str(static_dir / "organisations.html"))
+
+        @app.get("/login", include_in_schema=False)
+        async def login_page() -> FileResponse:
+            return FileResponse(str(static_dir / "login.html"))
 
     return app
 

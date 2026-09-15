@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Vaani — Sign in</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --line: #30363d;
+    --fg: #e6edf3; --dim: #8b949e;
+    --accent: #2f81f7; --err: #f85149;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f6f8fa; --panel:#fff; --line:#d8dee4; --fg:#1f2328; --dim:#656d76; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--fg);
+    font: 15px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: grid; place-items: center; padding: 24px;
+  }
+  .card {
+    width: 100%; max-width: 380px; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 12px; padding: 28px;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; font-weight: 650; letter-spacing: -0.01em; }
+  .sub { font-size: 13px; color: var(--dim); margin: 0 0 22px; }
+  label { display: block; font-size: 12px; color: var(--dim); margin-bottom: 4px; }
+  input {
+    font: inherit; width: 100%; padding: 10px 12px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--fg);
+    margin-bottom: 14px;
+  }
+  button {
+    font: inherit; font-weight: 600; width: 100%; padding: 11px; border-radius: 8px;
+    border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer;
+  }
+  button:disabled { opacity: .55; cursor: not-allowed; }
+  #error {
+    display: none; margin-bottom: 16px; padding: 10px 12px; border-radius: 8px;
+    border: 1px solid var(--err); color: var(--err); font-size: 13px;
+  }
+  #error.shown { display: block; }
+  .foot { font-size: 12px; color: var(--dim); margin: 18px 0 0; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<main class="card">
+  <h1>Vaani</h1>
+  <p class="sub">Sign in to the call centre console.</p>
+
+  <div id="error" role="alert"></div>
+
+  <form id="form">
+    <label for="email">Email</label>
+    <!-- autocomplete hints so password managers offer the right credential -->
+    <input id="email" name="email" type="email" autocomplete="username" required autofocus />
+
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required />
+
+    <button id="submit" type="submit">Sign in</button>
+  </form>
+
+  <p class="foot" id="foot"></p>
+</main>
+
+<script>
+"use strict";
+
+var form = document.getElementById("form");
+var errorBox = document.getElementById("error");
+var submit = document.getElementById("submit");
+
+function fail(message) {
+  errorBox.textContent = message;
+  errorBox.className = "shown";
+  submit.disabled = false;
+  submit.textContent = "Sign in";
+  document.getElementById("password").value = "";
+  document.getElementById("password").focus();
+}
+
+// Where to land afterwards. Only a same-origin path is honoured: an open
+// redirect on a sign-in page is how a convincing phishing link gets built.
+function destination() {
+  var next = new URLSearchParams(location.search).get("next") || "/";
+  return next.charAt(0) === "/" && next.charAt(1) !== "/" ? next : "/";
+}
+
+form.addEventListener("submit", async function (e) {
+  e.preventDefault();
+  errorBox.className = "";
+  submit.disabled = true;
+  submit.textContent = "Signing in…";
+
+  try {
+    var r = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      // The session arrives as a cookie, so the request has to be allowed to
+      // keep it.
+      credentials: "same-origin",
+      body: JSON.stringify({
+        email: document.getElementById("email").value.trim(),
+        password: document.getElementById("password").value,
+      }),
+    });
+    if (!r.ok) {
+      var detail = "Email or password is incorrect";
+      try { detail = (await r.json()).detail || detail; } catch (err) { /* no body */ }
+      fail(detail);
+      return;
+    }
+    location.href = destination();
+  } catch (err) {
+    fail("Could not reach the server. Check the connection and try again.");
+  }
+});
+
+// If a session is already live, skip the form rather than asking again.
+fetch("/api/auth/me", { credentials: "same-origin" }).then(function (r) {
+  if (r.ok) location.href = destination();
+}).catch(function () { /* not signed in; the form is the point */ });
+</script>
+</body>
+</html>

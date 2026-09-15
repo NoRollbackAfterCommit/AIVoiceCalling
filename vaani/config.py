@@ -86,6 +86,16 @@ class Settings(BaseSettings):
     )
     host: str = cfg("0.0.0.0", group="Service", label="Bind address")
     port: int = cfg(8080, group="Service", label="Port", ge=1, le=65535)
+    session_secret: str | None = cfg(
+        None,
+        group="Service",
+        label="Session signing key",
+        secret=True,
+        restart=False,
+        help="Signs the portal's sign-in cookies. Generated automatically on first "
+        "boot and kept; changing it signs everybody out, which is how you revoke "
+        "every session at once.",
+    )
     api_token: str | None = cfg(
         None,
         group="Service",

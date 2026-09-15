@@ -104,3 +104,29 @@ class AgentProfileRow(Base):
     # and a column each would mean a migration each.
     payload: Mapped[str] = mapped_column(Text)
     updated_at: Mapped[float] = mapped_column(Float)
+
+
+class UserRow(Base):
+    """A person who signs in to the portal.
+
+    `organisation_id` is NULL only for a platform administrator, who works
+    across every organisation. Every other role must name one, or its scope
+    filter would match nothing — or everything, depending which way it is
+    written, which is the failure that loses a customer their data.
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # Stored lowercased and stripped: people type their address the way their
+    # mail client shows it, and two rows differing only in case are two accounts.
+    email: Mapped[str] = mapped_column(String(254), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(Text)
+    name: Mapped[str] = mapped_column(String(120), default="")
+    role: Mapped[str] = mapped_column(String(24), index=True)
+    organisation_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("organisations.id"), nullable=True, index=True
+    )
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[float] = mapped_column(Float)
+    last_login_at: Mapped[float | None] = mapped_column(Float, nullable=True)
