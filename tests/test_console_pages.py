@@ -23,6 +23,7 @@ PAGES = [
     ("/calls", 'id="roster"'),
     ("/login", 'autocomplete="current-password"'),
     ("/organisations", 'id="didForm"'),
+    ("/users", 'id="roleHelp"'),
     ("/knowledge", 'id="drop"'),
     ("/settings", 'id="dirty"'),
 ]

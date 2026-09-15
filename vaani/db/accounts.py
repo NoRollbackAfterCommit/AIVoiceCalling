@@ -173,6 +173,18 @@ class AccountRepository:
                 update(UserRow).where(UserRow.id == user_id).values(active=active)
             )
 
+    async def set_role(self, user_id: int, role: str) -> None:
+        if role not in Role.ALL:
+            raise ValueError(f"unknown role {role!r}")
+        async with self._sessions() as session, session.begin():
+            await session.execute(update(UserRow).where(UserRow.id == user_id).values(role=role))
+
+    async def set_name(self, user_id: int, name: str) -> None:
+        async with self._sessions() as session, session.begin():
+            await session.execute(
+                update(UserRow).where(UserRow.id == user_id).values(name=name.strip())
+            )
+
     async def get(self, user_id: int) -> User | None:
         async with self._sessions() as session:
             row = await session.get(UserRow, user_id)

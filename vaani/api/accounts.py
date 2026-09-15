@@ -96,6 +96,133 @@ def _public(user: User) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Managing accounts
+# ---------------------------------------------------------------------------
+
+
+class UserIn(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=1, max_length=512)
+    role: str
+    name: str = ""
+    # Honoured only for a platform administrator. An org admin naming somebody
+    # else's organisation gets their own, which is what makes this field useless
+    # as a way to plant a user in another customer's account.
+    organisation_id: int | None = None
+
+
+class UserPatch(BaseModel):
+    active: bool | None = None
+    role: str | None = None
+    password: str | None = Field(default=None, min_length=1, max_length=512)
+    name: str | None = Field(default=None, max_length=120)
+
+
+def _unrestricted(request: Request) -> bool:
+    user = getattr(request.state, "user", None)
+    return user is None or user.is_platform_admin
+
+
+def _own_organisation(request: Request) -> int | None:
+    user = getattr(request.state, "user", None)
+    return None if user is None else user.organisation_id
+
+
+async def _visible_user(request: Request, user_id: int) -> Any:
+    """The account, or 404 when it belongs to another organisation.
+
+    404 rather than 403 for the same reason as everywhere else: a 403 confirms
+    the account exists, which is half of what an attacker wanted.
+    """
+    target = await _accounts(request).get(user_id)
+    if target is None:
+        raise HTTPException(404, f"No user {user_id}")
+    if not _unrestricted(request) and target.organisation_id != _own_organisation(request):
+        raise HTTPException(404, f"No user {user_id}")
+    return target
+
+
+@router.get("/users", tags=["users"])
+async def list_users(request: Request) -> list[dict[str, Any]]:
+    mine = None if _unrestricted(request) else _own_organisation(request)
+    users = await _accounts(request).users(mine)
+    return [_public(u) | {"active": u.active} for u in users]
+
+
+@router.post("/users", tags=["users"], status_code=201)
+async def create_user(body: UserIn, request: Request) -> dict[str, Any]:
+    accounts = _accounts(request)
+
+    if _unrestricted(request):
+        organisation_id = body.organisation_id
+        role = body.role
+    else:
+        # An organisation administrator is trusted inside their organisation and
+        # nowhere else. Both of these are the escalation this endpoint exists to
+        # refuse: awarding the whole deployment, and planting a user elsewhere.
+        if body.role == Role.PLATFORM_ADMIN:
+            raise HTTPException(403, "Only a platform administrator can create another")
+        organisation_id = _own_organisation(request)
+        role = body.role
+
+    try:
+        user = await accounts.create_user(
+            email=body.email,
+            password=body.password,
+            role=role,
+            organisation_id=organisation_id,
+            name=body.name,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return _public(user) | {"active": user.active}
+
+
+@router.patch("/users/{user_id}", tags=["users"])
+async def update_user(user_id: int, body: UserPatch, request: Request) -> dict[str, Any]:
+    accounts = _accounts(request)
+    target = await _visible_user(request, user_id)
+
+    if body.role is not None and body.role != target.role:
+        if not _unrestricted(request):
+            # Including promoting yourself, which is the same request.
+            raise HTTPException(403, "Only a platform administrator can change a role")
+        if body.role not in Role.ALL:
+            raise HTTPException(400, f"Unknown role {body.role!r}")
+        await accounts.set_role(user_id, body.role)
+
+    if body.active is not None and body.active != target.active:
+        if not body.active and await _is_last_platform_admin(accounts, target):
+            # There would be no way back in without shell access to the box.
+            raise HTTPException(400, "This is the last platform administrator")
+        await accounts.set_active(user_id, body.active)
+
+    if body.password is not None:
+        try:
+            await accounts.set_password(user_id, body.password)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        log.info("password changed", extra={"email": target.email})
+
+    if body.name is not None:
+        await accounts.set_name(user_id, body.name)
+
+    updated = await accounts.get(user_id)
+    return _public(updated) | {"active": updated.active}
+
+
+async def _is_last_platform_admin(accounts: Any, target: Any) -> bool:
+    if target.role != Role.PLATFORM_ADMIN:
+        return False
+    others = [
+        u
+        for u in await accounts.users()
+        if u.role == Role.PLATFORM_ADMIN and u.active and u.id != target.id
+    ]
+    return not others
+
+
+# ---------------------------------------------------------------------------
 # What each role may do
 # ---------------------------------------------------------------------------
 

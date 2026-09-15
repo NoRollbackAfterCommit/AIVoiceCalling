@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Vaani — People</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --line: #30363d;
+    --fg: #e6edf3; --dim: #8b949e;
+    --accent: #2f81f7; --ok: #3fb950; --warn: #d29922; --err: #f85149;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f6f8fa; --panel:#fff; --line:#d8dee4; --fg:#1f2328; --dim:#656d76; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    padding: 16px 24px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  }
+  h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  .tag {
+    font-size: 12px; color: var(--dim); border: 1px solid var(--line);
+    padding: 2px 8px; border-radius: 999px;
+  }
+  header a { color: var(--accent); text-decoration: none; font-size: 13px; }
+  main { display: grid; grid-template-columns: 1fr 380px; gap: 20px; padding: 20px 24px; }
+  @media (max-width: 960px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .panel h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--dim); margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--line);
+  }
+  .note { font-size: 12px; color: var(--dim); padding: 14px 16px; margin: 0; }
+  .row {
+    padding: 11px 16px; border-bottom: 1px solid var(--line);
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  }
+  .row .grow { flex: 1; min-width: 180px; }
+  .row .name { font-weight: 600; }
+  .row .sub { font-size: 12px; color: var(--dim); }
+  .suspended { opacity: .55; }
+  .pill {
+    font-size: 11px; padding: 1px 8px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--dim);
+  }
+  .pill.platform_admin { color: var(--accent); border-color: var(--accent); }
+  .pill.org_admin { color: var(--ok); border-color: var(--ok); }
+  .pill.off { color: var(--warn); border-color: var(--warn); }
+  form.add { padding: 14px 16px; display: grid; gap: 9px; }
+  label { font-size: 12px; color: var(--dim); display: block; margin-bottom: 3px; }
+  input, select {
+    font: inherit; width: 100%; padding: 8px 10px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--fg);
+  }
+  button {
+    font: inherit; font-weight: 600; padding: 9px 18px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--fg); cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.small { padding: 4px 10px; font-size: 12px; font-weight: 500; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #toast {
+    position: fixed; right: 20px; bottom: 20px; padding: 10px 16px; border-radius: 8px;
+    background: var(--panel); border: 1px solid var(--line); font-size: 13px;
+  }
+  #toast.bad { border-color: var(--err); color: var(--err); }
+</style>
+<script src="/static/auth.js"></script>
+</head>
+<body>
+<header>
+  <h1>Vaani</h1>
+  <span class="tag">people</span>
+  <a href="/" style="margin-left:auto">← Console</a>
+  <a href="/calls" style="margin-left:14px">Live calls</a>
+  <a href="/organisations" style="margin-left:14px" data-roles="platform_admin">Organisations</a>
+  <a href="/knowledge" style="margin-left:14px">Knowledge</a>
+  <a href="/settings" style="margin-left:14px" data-roles="platform_admin">Settings</a>
+</header>
+
+<main>
+  <div class="panel">
+    <h2>People</h2>
+    <div id="rows"></div>
+    <p class="note" id="empty" hidden>Nobody yet.</p>
+  </div>
+
+  <div class="panel">
+    <h2>Add someone</h2>
+    <form class="add" id="form">
+      <div>
+        <label for="email">Email</label>
+        <input id="email" type="email" required autocomplete="off" />
+      </div>
+      <div>
+        <label for="name">Name</label>
+        <input id="name" autocomplete="off" />
+      </div>
+      <div>
+        <label for="role">Role</label>
+        <select id="role" required></select>
+      </div>
+      <div id="orgField" hidden>
+        <label for="org">Organisation</label>
+        <select id="org"></select>
+      </div>
+      <div>
+        <label for="password">Temporary password</label>
+        <input id="password" type="password" minlength="12" required autocomplete="new-password" />
+      </div>
+      <button class="primary" type="submit">Add</button>
+    </form>
+    <p class="note" id="roleHelp"></p>
+  </div>
+</main>
+
+<div id="toast" hidden></div>
+
+<script>
+"use strict";
+
+var me = null;
+var orgs = [];
+
+// What each role is for, in the words an operator would use rather than the
+// words the code uses.
+var ROLE_LABELS = {
+  platform_admin: "Platform administrator — every organisation, plus settings",
+  org_admin: "Organisation administrator — agents, knowledge, numbers, people",
+  supervisor: "Supervisor — watch and end live calls, read reports",
+  viewer: "Viewer — read reports only",
+};
+
+function el(id) { return document.getElementById(id); }
+
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
+
+var toastTimer = null;
+function toast(message, bad) {
+  var t = el("toast");
+  t.textContent = message;
+  t.className = bad ? "bad" : "";
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { t.hidden = true; }, 4000);
+}
+
+async function send(method, url, body) {
+  var init = { method: method, credentials: "same-origin" };
+  if (body !== undefined) {
+    init.headers = { "Content-Type": "application/json" };
+    init.body = JSON.stringify(body);
+  }
+  var r = await fetch(url, init);
+  if (!r.ok) {
+    var detail = "";
+    try { detail = (await r.json()).detail; } catch (e) { /* no body */ }
+    throw new Error(detail || ("HTTP " + r.status));
+  }
+  return r.json();
+}
+
+async function load() {
+  me = await window.vaaniAuth.me();
+  if (!me) return;  // auth.js is already sending them to sign in
+
+  // Only a platform administrator may create another, or choose the
+  // organisation. The server enforces both; this stops the form offering
+  // what would be refused.
+  var roles = me.role === "platform_admin"
+    ? ["platform_admin", "org_admin", "supervisor", "viewer"]
+    : ["org_admin", "supervisor", "viewer"];
+  el("role").innerHTML = roles.map(function (r) {
+    return '<option value="' + r + '">' + esc(ROLE_LABELS[r].split(" — ")[0]) + "</option>";
+  }).join("");
+  el("role").addEventListener("change", showRoleHelp);
+  showRoleHelp();
+
+  if (me.role === "platform_admin") {
+    try {
+      orgs = await send("GET", "/api/organisations");
+      el("org").innerHTML = orgs.map(function (o) {
+        return '<option value="' + o.id + '">' + esc(o.name) + "</option>";
+      }).join("");
+      el("orgField").hidden = false;
+    } catch (e) { /* organisations are optional for this form */ }
+  }
+  await draw();
+}
+
+function showRoleHelp() {
+  el("roleHelp").textContent = ROLE_LABELS[el("role").value] || "";
+  // A platform administrator belongs to no single organisation.
+  if (me && me.role === "platform_admin") {
+    el("orgField").hidden = el("role").value === "platform_admin";
+  }
+}
+
+async function draw() {
+  var users;
+  try { users = await send("GET", "/api/users"); } catch (e) { toast(e.message, true); return; }
+  el("empty").hidden = users.length > 0;
+  el("rows").innerHTML = users.map(function (u) {
+    var isMe = me && u.id === me.id;
+    return '<div class="row' + (u.active ? "" : " suspended") + '">' +
+      '<span class="grow"><span class="name">' + esc(u.name || u.email) + "</span>" +
+      (isMe ? ' <span class="pill">you</span>' : "") +
+      (u.active ? "" : ' <span class="pill off">suspended</span>') +
+      '<div class="sub">' + esc(u.email) + "</div></span>" +
+      '<span class="pill ' + esc(u.role) + '">' + esc(u.role.replace("_", " ")) + "</span>" +
+      '<button class="small" data-reset="' + u.id + '">Reset password</button>' +
+      '<button class="small" data-toggle="' + u.id + '" data-active="' + u.active + '">' +
+      (u.active ? "Suspend" : "Restore") + "</button></div>";
+  }).join("");
+}
+
+el("form").addEventListener("submit", async function (e) {
+  e.preventDefault();
+  var body = {
+    email: el("email").value.trim(),
+    name: el("name").value.trim(),
+    role: el("role").value,
+    password: el("password").value,
+  };
+  if (!el("orgField").hidden && el("org").value) {
+    body.organisation_id = Number(el("org").value);
+  }
+  try {
+    await send("POST", "/api/users", body);
+    el("email").value = el("name").value = el("password").value = "";
+    toast("Added. Ask them to change the password when they first sign in.");
+    await draw();
+  } catch (err) { toast(err.message, true); }
+});
+
+document.addEventListener("click", async function (e) {
+  var btn = e.target.closest ? e.target.closest("button[data-toggle],button[data-reset]") : null;
+  if (!btn) return;
+
+  if (btn.dataset.reset) {
+    var next = window.prompt("New password (at least 12 characters):");
+    if (!next) return;
+    try {
+      await send("PATCH", "/api/users/" + btn.dataset.reset, { password: next });
+      toast("Password changed.");
+    } catch (err) { toast(err.message, true); }
+    return;
+  }
+
+  var active = btn.dataset.active === "true";
+  if (active && !window.confirm("Suspend this person? They lose access on their next click.")) {
+    return;
+  }
+  try {
+    await send("PATCH", "/api/users/" + btn.dataset.toggle, { active: !active });
+    await draw();
+  } catch (err) { toast(err.message, true); }
+});
+
+load();
+</script>
+</body>
+</html>

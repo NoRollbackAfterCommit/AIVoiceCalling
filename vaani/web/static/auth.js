@@ -1,4 +1,10 @@
-// Console-side support for VAANI_API_TOKEN (see vaani/api/auth.py for the server-side gate).
+// Console-side authentication (see vaani/api/auth.py for the server-side gate).
+//
+// People sign in at /login and carry a session cookie, which the browser attaches to
+// same-origin requests — including WebSocket handshakes — without any help from here.
+// The stored API token remains supported for a machine or an operator pasting one in,
+// and is tried first when present; a 401 with no session sends the person to sign in
+// rather than asking them to paste a master key into a browser prompt.
 // Plain browser JS, no build step, no dependencies — loaded directly by <script src="/static/auth.js">.
 (function () {
   'use strict';
@@ -42,7 +48,7 @@
     return url;
   }
 
-  window.vaaniAuth = { token: token, set: set, clear: clear, wsUrl: wsUrl };
+
 
   // --- fetch wrapper -------------------------------------------------------
   // Only same-origin /api/* requests get the Authorization header; everything else
@@ -52,19 +58,29 @@
   // the user must see one prompt, not one per request; they share this.
   var pendingPrompt = null;
 
-  function promptOnce() {
-    if (!pendingPrompt) {
-      pendingPrompt = Promise.resolve().then(function () {
-        clear();
-        var entered = window.prompt(
-          'This Vaani server requires an API token. Paste it to continue.'
-        );
-        if (entered) set(entered);
-        return entered;
-      });
-      pendingPrompt.then(function () { pendingPrompt = null; }, function () { pendingPrompt = null; });
-    }
-    return pendingPrompt;
+  var redirecting = false;
+
+  // A rejected request means no usable session. Send them to sign in, once,
+  // remembering where they were so they land back on it.
+  function goToLogin() {
+    if (redirecting) return;
+    redirecting = true;
+    clear();
+    var here = location.pathname + location.search;
+    location.href = "/login?next=" + encodeURIComponent(here);
+  }
+
+  function me() {
+    return originalFetch.call(window, "/api/auth/me", { credentials: "same-origin" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .catch(function () { return null; });
+  }
+
+  function signOut() {
+    return originalFetch.call(window, "/api/auth/logout",
+      { method: "POST", credentials: "same-origin" })
+      .catch(function () { /* going to the login page regardless */ })
+      .then(function () { clear(); location.href = "/login"; });
   }
 
   function isSameOriginApiPath(urlString) {
@@ -107,6 +123,57 @@
     return [input, newInit];
   }
 
+  // Hide what the role cannot use, and give every page a way out.
+  // Driven by data-role attributes on the links themselves, so a page adds a
+  // link without this file learning about it.
+  function applyIdentity(user) {
+    var header = document.querySelector("header");
+    if (!header) return;
+
+    Array.prototype.forEach.call(header.querySelectorAll("[data-roles]"), function (el) {
+      var allowed = el.getAttribute("data-roles").split(/[,\s]+/);
+      var visible = !user || allowed.indexOf(user.role) >= 0;
+      el.hidden = !visible;
+    });
+
+    if (header.querySelector("[data-signout]")) return;
+    var who = document.createElement("span");
+    who.className = "tag";
+    who.setAttribute("data-signout", "");
+    who.style.cssText = "margin-left:14px;cursor:pointer";
+    who.title = user ? "Signed in as " + user.email + " — click to sign out" : "Sign in";
+    who.textContent = user ? (user.name || user.email) + " · sign out" : "Sign in";
+    who.addEventListener("click", function () {
+      if (user) { signOut(); } else { location.href = "/login"; }
+    });
+    header.appendChild(who);
+  }
+
+  function mountIdentity() {
+    me().then(function (user) {
+      window.vaaniAuth.user = user;
+      applyIdentity(user);
+      if (user) return;
+      // Nobody is signed in. That is normal on an open deployment and for a
+      // machine holding the token, and it is a dead end for an operator — so
+      // ask a guarded endpoint which of the three this is, through the wrapper,
+      // and let its 401 handling send them to sign in. A page that renders
+      // nothing is worse than a login form.
+      window.fetch("/api/agents", { credentials: "same-origin" }).catch(function () {});
+    });
+  }
+
+  window.vaaniAuth = {
+    token: token, set: set, clear: clear, wsUrl: wsUrl,
+    me: me, signOut: signOut, mountIdentity: mountIdentity, user: null,
+  };
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", mountIdentity);
+  } else {
+    mountIdentity();
+  }
+
   window.fetch = function (input, init) {
     var urlString = requestUrlString(input);
     var resolved = isSameOriginApiPath(urlString);
@@ -132,15 +199,10 @@
 
     return doFetch().then(function (response) {
       if (response.status !== 401) return response;
-
-      // The stored token (if any) was rejected. An open server never 401s, so
-      // this is the first moment a prompt is warranted.
-      return promptOnce().then(function (entered) {
-        if (!entered) return response;
-        var retryArgs = withAuthHeader(retryInput, init, entered);
-        if (retryArgs instanceof Request) return originalFetch.call(window, retryArgs);
-        return originalFetch.call(window, retryArgs[0], retryArgs[1]);
-      });
+      // Neither a session nor a usable token. An open server never 401s, so
+      // this is the first moment signing in is warranted.
+      goToLogin();
+      return response;
     });
   };
 })();

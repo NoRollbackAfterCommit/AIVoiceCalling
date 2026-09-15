@@ -233,6 +233,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         async def login_page() -> FileResponse:
             return FileResponse(str(static_dir / "login.html"))
 
+        @app.get("/users", include_in_schema=False)
+        async def users_page() -> FileResponse:
+            return FileResponse(str(static_dir / "users.html"))
+
     return app
 
 
