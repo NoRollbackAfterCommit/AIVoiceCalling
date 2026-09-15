@@ -66,6 +66,8 @@ class CallRepository:
                     agent_key=record.agent_key,
                     direction=record.direction,
                     caller_number=record.caller_number,
+                    organisation_id=getattr(record, "organisation_id", None),
+                    did=getattr(record, "did", None),
                     started_at=record.started_at,
                     outcome=record.outcome,
                     language=getattr(record, "language", None),

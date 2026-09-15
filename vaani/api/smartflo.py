@@ -40,6 +40,8 @@ from vaani.api.limits import enforce_body_limit
 from vaani.core.logging import get_logger
 from vaani.pipeline.manager import CallCapacityError
 from vaani.pipeline.session import CallSession
+from vaani.telephony.numbers import to_e164
+from vaani.telephony.routing import route_call
 from vaani.telephony.smartflo import SmartfloTransport
 from vaani.telephony.smartflo_frames import SmartfloEvent, parse_frame
 
@@ -314,12 +316,19 @@ async def smartflo_stream(ws: WebSocket) -> None:
 
     services = ws.app.state.services
     manager = ws.app.state.calls
+    # Which organisation's call centre this is, decided by the number dialled.
+    # An unmapped number still gets answered, by the configured fallback agent,
+    # and is recorded unattributed — a configuration gap must not cost a caller
+    # their call.
+    organisation_id, agent_key = await route_call(services, start.called)
     session = CallSession(
         transport=transport,
         services=services,
-        agent_key=getattr(settings, "smartflo_agent", "default") or "default",
+        agent_key=agent_key,
         caller_number=start.caller,
         direction=start.direction or "inbound",
+        organisation_id=organisation_id,
+        did=to_e164(start.called),
     )
     try:
         await manager.register(session)

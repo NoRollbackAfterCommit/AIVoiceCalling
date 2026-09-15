@@ -160,6 +160,9 @@ class Services:
     # Fan-out of call events to supervisor dashboards. Optional for the same
     # reason: a call must work with nobody watching.
     monitor: Any = None
+    # Organisations and the numbers that reach them. Optional for the same
+    # reason as the rest: a bare install answers every call as unattributed.
+    tenancy: Any = None
     # Durable home for edited profiles. Optional: without it the editor works
     # in memory and forgets on restart, which is what a bare install gets.
     profile_store: Any = None

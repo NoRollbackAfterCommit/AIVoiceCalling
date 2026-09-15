@@ -60,6 +60,11 @@ class CallRow(Base):
     agent_key: Mapped[str] = mapped_column(String(64), index=True)
     direction: Mapped[str] = mapped_column(String(16), default="inbound")
     caller_number: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Nullable: a call to a number nobody has mapped yet is still served, and
+    # must show in reporting as unattributed rather than be counted against
+    # whichever organisation happens to be first.
+    organisation_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    did: Mapped[str | None] = mapped_column(String(24), nullable=True, index=True)
     started_at: Mapped[float] = mapped_column(Float, index=True)
     ended_at: Mapped[float | None] = mapped_column(Float, nullable=True)
     outcome: Mapped[str] = mapped_column(String(32), default="in_progress", index=True)

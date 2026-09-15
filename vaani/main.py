@@ -23,6 +23,7 @@ from vaani.core.logging import configure_logging, get_logger
 from vaani.core.registry import build_services
 from vaani.db.profiles import ProfileRepository
 from vaani.db.repository import CallRepository
+from vaani.db.tenancy import TenancyRepository
 from vaani.pipeline.manager import CallManager
 from vaani.pipeline.monitor import MonitorHub
 from vaani.settings_store import SettingsStore
@@ -51,6 +52,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await repository.start()
     services.calls = repository
     services.profile_store = ProfileRepository(repository.sessions)
+    services.tenancy = TenancyRepository(repository.sessions)
     # Saved profiles over the built-in default, the way persisted settings layer
     # over the environment: what boots is what the operator last saved.
     services.profiles.update(await services.profile_store.load())

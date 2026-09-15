@@ -89,6 +89,13 @@ class CallRecord:
     agent_key: str
     direction: str = "inbound"
     caller_number: str | None = None
+    # Whose call centre this call reached, and the number that was dialled.
+    # Both are stamped when the call starts rather than when it ends: reporting
+    # is per organisation and per DID, and a crash mid-call must not lose the
+    # attribution along with everything else. None means unattributed — a real
+    # call to a number nobody has mapped yet, served rather than dropped.
+    organisation_id: int | None = None
+    did: str | None = None
     started_at: float = field(default_factory=time.time)
     ended_at: float | None = None
     turns: list[dict[str, Any]] = field(default_factory=list)
@@ -115,6 +122,8 @@ class CallRecord:
             "agent_key": self.agent_key,
             "direction": self.direction,
             "caller_number": self.caller_number,
+            "organisation_id": self.organisation_id,
+            "did": self.did,
             "started_at": self.started_at,
             "ended_at": self.ended_at,
             "duration_s": round(self.duration_s, 2),
@@ -184,6 +193,8 @@ class CallSession:
         direction: str = "inbound",
         call_id: str | None = None,
         settings: Settings | None = None,
+        organisation_id: int | None = None,
+        did: str | None = None,
     ) -> None:
         self.call_id = call_id or uuid.uuid4().hex[:16]
         # Wrapped once rather than tapped at each send site: there are a dozen
@@ -201,6 +212,8 @@ class CallSession:
             agent_key=agent_key,
             direction=direction,
             caller_number=caller_number,
+            organisation_id=organisation_id,
+            did=did,
         )
 
         self._tool_ctx = ToolContext(
