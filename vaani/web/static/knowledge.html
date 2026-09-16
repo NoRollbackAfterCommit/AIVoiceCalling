@@ -83,6 +83,33 @@
   tr:last-child td { border-bottom: 0; }
   td.num { font-variant-numeric: tabular-nums; color: var(--dim); width: 90px; }
   td.act { width: 90px; text-align: right; }
+  .scopebar {
+    max-width: 900px; margin: 18px auto -6px; padding: 0 24px;
+  }
+  .scopebar .inner {
+    border: 1px solid var(--line); border-radius: 10px; padding: 13px 16px;
+    background: var(--panel);
+  }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button {
+    border: 0; border-radius: 0; padding: 7px 14px; font-size: 13px; font-weight: 550;
+    background: transparent; color: var(--dim); cursor: pointer;
+  }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button.on { background: var(--accent); color: #fff; }
+  .seg button:disabled { opacity: .45; cursor: not-allowed; }
+  .served { margin-top: 10px; font-size: 13px; line-height: 1.55; }
+  .served b { font-weight: 650; }
+  .served .num {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12.5px;
+    background: var(--sunken); border: 1px solid var(--line); border-radius: 5px;
+    padding: 1px 6px; margin-right: 4px; display: inline-block;
+  }
+  .pill {
+    font-size: 11px; padding: 1px 7px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--dim); white-space: nowrap;
+  }
+  .pill.org { color: var(--accent); border-color: var(--accent); }
   .src { font-weight: 550; word-break: break-all; }
   .empty { padding: 22px 18px; color: var(--dim); font-size: 14px; }
 
@@ -120,9 +147,19 @@
   <a href="/calls">Live calls</a>
   <a href="/settings" data-roles="platform_admin">Settings</a>
   <span class="spacer"></span>
-  <label for="agent" style="font-size:13px;color:var(--dim);font-weight:400">Agent</label>
+  <label for="agent" style="font-size:13px;color:var(--dim);font-weight:400">Line</label>
   <select id="agent" style="width:auto;min-width:150px"></select>
 </header>
+
+<div class="scopebar">
+  <div class="inner">
+    <div class="seg" id="scope">
+      <button data-scope="organisation" type="button">Whole organisation</button>
+      <button data-scope="agent" type="button">This line only</button>
+    </div>
+    <div class="served" id="served">Loading…</div>
+  </div>
+</div>
 
 <main>
   <div class="group">
@@ -175,8 +212,9 @@
         <button id="search">Search</button>
       </div>
       <div class="help" style="margin-top:8px">
-        What the agent would retrieve for this question. The fastest way to diagnose
-        a wrong answer without placing a call.
+        What this line would retrieve — its own documents and its organisation's
+        shared set together, exactly as a real call reads them. The fastest way to
+        diagnose a wrong answer without placing a call.
       </div>
       <div id="hits"></div>
     </div>
@@ -191,6 +229,16 @@ const esc = s => String(s).replace(/[&<>"']/g, c =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 let agentKey = 'default';
+// Which set a new document goes into. "organisation" is every line the customer
+// runs; "agent" is this line alone. A call reads both, so the choice is only
+// about how widely the document applies — never about who can see it.
+let scope = 'organisation';
+// Whether the operator has picked a scope themselves. Until they do, each
+// line opens on the widest one it has, so switching from a line that has no
+// organisation to one that does does not silently leave uploads narrowed.
+let scopeChosen = false;
+let profile = null;   // the selected line, for its organisation
+let dids = [];        // every number this operator can see
 
 function toast(msg, kind) {
   const t = el('toast');
@@ -213,7 +261,81 @@ async function loadAgents() {
     el('agent').innerHTML = '<option value="default">default</option>';
   }
   agentKey = el('agent').value || 'default';
+  await loadScope();
 }
+
+// -- which numbers this actually affects -------------------------------------
+
+async function loadScope() {
+  try {
+    profile = await (await fetch(
+      `/api/agents/${encodeURIComponent(agentKey)}`)).json();
+  } catch { profile = null; }
+  try {
+    dids = await (await fetch('/api/dids')).json();
+  } catch { dids = []; }
+
+  // A line with no organisation — the fallback agent on an unmapped number —
+  // has no shared set to put anything in, so that choice is not offered.
+  const orgId = profile && profile.organisation_id;
+  const orgButton = el('scope').querySelector('[data-scope="organisation"]');
+  orgButton.disabled = !orgId;
+  if (!orgId) scope = 'agent';
+  else if (!scopeChosen) scope = 'organisation';
+
+  Array.from(el('scope').children).forEach(b => {
+    b.classList.toggle('on', b.dataset.scope === scope);
+  });
+  drawServed(orgId);
+}
+
+// "answered on <numbers>" only reads as English when there are some. With none
+// the sentence has to end differently, and saying so matters: a set nothing is
+// mapped to is a set no caller will ever hear.
+function answeredOn(list) {
+  if (!list.length) {
+    return ' — <span style="color:var(--warn)">no numbers are mapped to it yet, '
+      + 'so nothing here can reach a caller.</span>';
+  }
+  return ' — answered on '
+    + list.map(d => `<span class="num">${esc(d.number)}</span>`).join('');
+}
+
+function drawServed(orgId) {
+  const mine = dids.filter(d => d.agent_key === agentKey);
+  const orgs = dids.filter(d => orgId && d.organisation_id === orgId);
+  const orgName = (profile && profile.organisation)
+    || (orgs[0] && orgs[0].organisation_name) || 'this organisation';
+
+  if (scope === 'organisation') {
+    el('served').innerHTML =
+      `Adding to <b>${esc(orgName)}</b>’s shared set`
+      + answeredOn(orgs)
+      + `<div class="help">Every line this organisation runs answers from it. `
+      + `Use this for what they all share: hours, fees, contacts, eligibility.</div>`;
+  } else {
+    el('served').innerHTML =
+      `Adding to <b>${esc(agentKey)}</b> only`
+      + answeredOn(mine)
+      + `<div class="help">Used on ${mine.length === 1 ? 'that number' : 'those numbers'} `
+      + `and no other, on top of `
+      + (orgId
+          ? `<b>${esc(orgName)}</b>’s shared set.`
+          : `nothing else — this line belongs to no organisation.`)
+      + `</div>`;
+  }
+}
+
+el('scope').addEventListener('click', ev => {
+  const chosen = ev.target.dataset && ev.target.dataset.scope;
+  if (!chosen || ev.target.disabled) return;
+  scope = chosen;
+  scopeChosen = true;
+  Array.from(el('scope').children).forEach(b => {
+    b.classList.toggle('on', b.dataset.scope === scope);
+  });
+  drawServed(profile && profile.organisation_id);
+});
 
 // -- sources ---------------------------------------------------------------
 
@@ -221,7 +343,7 @@ async function loadSources() {
   const box = el('sources');
   try {
     const rows = await (await fetch(
-      `/api/knowledge/sources?agent_key=${encodeURIComponent(agentKey)}`)).json();
+      `/api/knowledge/sources?agent_key=${encodeURIComponent(agentKey)}&scope=both`)).json();
     if (!rows.length) {
       box.innerHTML = '<div class="empty">Nothing indexed yet. '
         + 'Upload a document or paste text above.</div>';
@@ -232,13 +354,17 @@ async function loadSources() {
     el('total').textContent = `· ${rows.length} source${rows.length > 1 ? 's' : ''}, `
       + `${chunks} chunk${chunks > 1 ? 's' : ''}`;
     box.innerHTML = `<table><thead><tr>
-        <th>Source</th><th>Chunks</th><th></th>
+        <th>Source</th><th>Used on</th><th>Chunks</th><th></th>
       </tr></thead><tbody>${rows.map(r => `
         <tr>
           <td class="src">${esc(r.source)}</td>
+          <td>${r.scope === 'organisation'
+                ? '<span class="pill org">whole organisation</span>'
+                : `<span class="pill">${esc(agentKey)} only</span>`}</td>
           <td class="num">${r.chunks}</td>
           <td class="act">
-            <button class="small danger" data-del="${esc(r.source)}">Delete</button>
+            <button class="small danger" data-del="${esc(r.source)}"
+                    data-scope="${esc(r.scope)}">Delete</button>
           </td>
         </tr>`).join('')}</tbody></table>`;
   } catch (e) {
@@ -249,13 +375,19 @@ async function loadSources() {
 el('sources').addEventListener('click', async ev => {
   const source = ev.target.dataset && ev.target.dataset.del;
   if (!source) return;
-  if (!confirm(`Delete "${source}" from the knowledge base?\n\n`
-             + `The agent will immediately stop answering from it.`)) return;
+  // Named before it is done: withdrawing a shared circular takes it off every
+  // line the organisation runs, not just the one on screen.
+  const reach = (ev.target.dataset.scope === 'organisation')
+    ? `Every line this organisation runs will stop answering from it.`
+    : `${agentKey} will immediately stop answering from it.`;
+  if (!confirm(`Delete "${source}"?\n\n${reach}`)) return;
   ev.target.disabled = true;
   try {
     const res = await fetch(
       `/api/knowledge/source/${encodeURIComponent(source)}`
-      + `?agent_key=${encodeURIComponent(agentKey)}`, { method: 'DELETE' });
+      + `?agent_key=${encodeURIComponent(agentKey)}`
+      + `&scope=${encodeURIComponent(ev.target.dataset.scope || 'agent')}`,
+      { method: 'DELETE' });
     if (!res.ok) throw new Error(await res.text());
     const out = await res.json();
     // Qdrant reports -1: it does not return a delete count.
@@ -296,7 +428,8 @@ async function upload(files) {
       const form = new FormData();
       form.append('file', file);
       const res = await fetch(
-        `/api/knowledge/upload?agent_key=${encodeURIComponent(agentKey)}`,
+        `/api/knowledge/upload?agent_key=${encodeURIComponent(agentKey)}`
+        + `&scope=${encodeURIComponent(scope)}`,
         { method: 'POST', body: form });
       const out = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(out.detail || res.statusText);
@@ -337,6 +470,7 @@ el('addText').addEventListener('click', async () => {
         text: el('text').value,
         source: el('src').value.trim(),
         agent_key: agentKey,
+        scope: scope,
       }),
     });
     const out = await res.json().catch(() => ({}));
@@ -387,10 +521,11 @@ async function runSearch() {
 el('search').addEventListener('click', runSearch);
 el('q').addEventListener('keydown', e => { if (e.key === 'Enter') runSearch(); });
 
-el('agent').addEventListener('change', () => {
+el('agent').addEventListener('change', async () => {
   agentKey = el('agent').value;
   el('hits').innerHTML = '';
-  loadSources();
+  await loadScope();
+  await loadSources();
 });
 
 (async function init() {

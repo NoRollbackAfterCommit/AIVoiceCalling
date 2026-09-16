@@ -73,15 +73,40 @@ documents.
 
 ### 3. Teach it
 
-**Knowledge → choose the agent → paste text or upload a file.**
+**Knowledge → choose the line → choose the scope → paste text or upload a file.**
 
-Each agent has its own corpus, and they cannot see each other's. Upload the
-circulars, the fee schedule, the FAQ sheet — whatever the callers actually ring
-up about. It is searchable immediately.
+There are two training sets, and every call reads both.
+
+| | Who answers from it |
+|---|---|
+| **Whole organisation** | Every line that organisation runs. Upload the fee schedule once and all its numbers have it. |
+| **This line only** | That line alone, on top of the shared set. The examination timetable belongs here, not on the admissions line. |
+
+The bar at the top of the page names the scope you are adding to and lists the
+exact phone numbers it will be answered on. Read it before you upload; it is
+the difference between correcting one line and correcting five.
+
+Put anything the whole call centre shares — hours, fees, contacts, eligibility,
+the general FAQ — in the organisation's set. Keep a line's own set for what only
+its callers should hear.
+
+> An organisation's set needs the line to belong to an organisation. A number
+> nobody has mapped is answered by the fallback agent, which belongs to nobody
+> and reads only its own documents — deliberately, so an unconfigured number can
+> never be read a customer's material.
 
 Give every upload a source name you will recognise (`fees-2026.pdf`), because
-that is what appears in reports when the bot cites it, and it is how you delete
-or replace it later.
+that is what appears in reports when the bot cites it, and it is how you replace
+or delete it later.
+
+**To correct a document, upload it again under the same source name.** The old
+version is removed as the new one goes in, so the bot cannot quote the
+superseded text. To withdraw one entirely, use **Delete** on its row — the row
+says which scope it lives in, and deleting a shared one takes it off every line
+of that organisation.
+
+**Test retrieval** at the foot of the page shows what that line would actually
+find for a question — both sets together, exactly as a real call reads them.
 
 ### 4. Map the phone number
 

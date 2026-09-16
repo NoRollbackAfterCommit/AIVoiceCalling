@@ -69,8 +69,23 @@ users           id, email, password_hash, role, organisation_id, active
 
 A call arrives, `vaani/telephony/routing.py` normalises the dialled number to
 E.164 and looks it up. That yields the organisation and the agent profile that
-answers. Knowledge is already namespaced per agent, so a corpus follows its
-agent and therefore its organisation.
+answers, and both travel with the call as far as `ToolContext`.
+
+Knowledge is partitioned by that pair. A vector-store namespace is either an
+agent key or `org:<id>`, and a lookup reads both — the line's own documents and
+its organisation's shared set, ranked as one result. Two queries rather than
+one because the store partitions by a single namespace; the alternative is
+scanning every customer's corpus and filtering afterwards.
+
+    DID ─▶ route_call ─▶ (organisation_id, agent_key) ─▶ ToolContext
+                                                            │
+                          search_knowledge ─▶ namespaces: agent_key + org:<id>
+
+Isolation is therefore structural rather than a filter somebody has to
+remember. An agent with no organisation — the fallback on an unmapped number —
+reads only its own namespace, because an unconfigured number belongs to no
+customer and must not fall into one's documents. Agent keys are validated to
+`[a-z0-9][a-z0-9_-]*` so none can ever spell `org:<id>`.
 
 Three decisions worth understanding before changing any of it:
 

@@ -158,17 +158,39 @@ async def get_agent(key: str, request: Request) -> dict[str, Any]:
 
 
 @router.put("/agents/{key}", tags=["agents"])
-async def upsert_agent(key: str, body: AgentProfileIn, request: Request) -> dict[str, Any]:
+async def upsert_agent(
+    key: str,
+    body: AgentProfileIn,
+    request: Request,
+    organisation_id: int | None = Query(
+        default=None,
+        description="Which organisation owns this agent. Honoured only for a "
+        "platform administrator; for anyone else their own organisation is used "
+        "whatever they ask for.",
+    ),
+) -> dict[str, Any]:
     services = request.app.state.services
     existing = services.profiles.get(key)
     if existing is not None:
         # Editing somebody else's agent rewrites what their bot says out loud.
         _owned_agent(request, key)
-    owner = (
-        getattr(existing, "organisation_id", None)
-        if existing is not None
-        else visible_organisation(request)
-    )
+
+    # Ownership decides which organisation's shared training set this line
+    # reads, so somebody has to be able to set it: until they could, every
+    # agent a platform administrator created belonged to nobody and could never
+    # use a customer's shared documents at all.
+    #
+    # A query parameter rather than a body field, and read through
+    # visible_organisation, which honours it only for an unrestricted caller.
+    # An org admin naming somebody else's organisation still gets their own —
+    # scope comes from who you are, never from what you asked for.
+    if existing is None:
+        owner = visible_organisation(request, organisation_id)
+    elif organisation_id is not None and is_unrestricted(request):
+        owner = organisation_id
+    else:
+        # An ordinary edit must not quietly re-home the agent.
+        owner = getattr(existing, "organisation_id", None)
     known = set(services.tools.names())
     unknown = [t for t in body.tools if t not in known]
     if unknown:

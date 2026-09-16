@@ -309,3 +309,70 @@ async def test_the_export_neutralises_spreadsheet_formulas(world):
     assert _csv_safe("=cmd|'/c calc'!A0").startswith("'")
     assert _csv_safe("ordinary") == "ordinary"
     assert _csv_safe(42) == 42
+
+
+# -- who may put an agent into an organisation -------------------------------
+
+
+async def test_a_platform_admin_can_put_a_new_agent_into_an_organisation(world):
+    """Somebody has to. A platform administrator sets a customer up, and until
+    they could name the organisation, every agent they made belonged to none —
+    which meant it could never read that customer's shared training set."""
+    client, alpha, _beta, _calls = world
+    await _as(client, "root@euphoria.example")
+
+    created = await client.put(
+        "/api/agents/new-line",
+        params={"organisation_id": alpha.id},
+        json={"key": "new-line"},
+    )
+    assert created.status_code == 200, created.text
+    assert (await client.get("/api/agents/new-line")).json()["organisation_id"] == alpha.id
+
+
+async def test_a_platform_admin_can_move_an_agent_that_belongs_to_nobody(world):
+    """The agent a deployment starts with has no organisation. Without a way to
+    adopt it, the first customer on an existing box could never use a shared
+    set for the line they were already running."""
+    client, alpha, _beta, _calls = world
+    await _as(client, "root@euphoria.example")
+
+    assert (await client.get("/api/agents/default")).json()["organisation_id"] is None
+    moved = await client.put(
+        "/api/agents/default", params={"organisation_id": alpha.id}, json={"key": "default"}
+    )
+    assert moved.status_code == 200, moved.text
+    assert (await client.get("/api/agents/default")).json()["organisation_id"] == alpha.id
+
+
+async def test_an_org_admin_naming_another_organisation_is_ignored(world):
+    """Scope comes from who you are, never from what you asked for. The
+    parameter is how a platform admin narrows; it must not let a customer
+    hand their agent to somebody else, or take one."""
+    client, alpha, beta, _calls = world
+    await _as(client, "admin@alpha.example")
+
+    created = await client.put(
+        "/api/agents/alpha-new", params={"organisation_id": beta.id}, json={"key": "alpha-new"}
+    )
+    assert created.status_code == 200, created.text
+    assert (await client.get("/api/agents/alpha-new")).json()["organisation_id"] == alpha.id
+
+
+async def test_an_org_admin_cannot_move_their_agent_out_of_their_organisation(world):
+    client, alpha, beta, _calls = world
+    await _as(client, "admin@alpha.example")
+
+    await client.put(
+        "/api/agents/alpha-agent", params={"organisation_id": beta.id}, json={"key": "alpha-agent"}
+    )
+    assert (await client.get("/api/agents/alpha-agent")).json()["organisation_id"] == alpha.id
+
+
+async def test_an_agent_keeps_its_organisation_when_none_is_named(world):
+    """An ordinary edit — changing a greeting — must not quietly re-home it."""
+    client, alpha, _beta, _calls = world
+    await _as(client, "root@euphoria.example")
+
+    await client.put("/api/agents/alpha-agent", json={"key": "alpha-agent", "greeting": "Hello."})
+    assert (await client.get("/api/agents/alpha-agent")).json()["organisation_id"] == alpha.id

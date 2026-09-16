@@ -142,6 +142,15 @@
           <input id="organisation" autocomplete="off" />
           <p class="hint">Said aloud, so write it as speech: "the Health University".</p>
         </div>
+        <div class="field" id="ownerField" hidden>
+          <label for="owner">Organisation it belongs to</label>
+          <select id="owner"></select>
+          <p class="hint">
+            Who owns this line: whose reports it appears in, whose staff may edit
+            it, and whose shared training set it answers from. Different from the
+            name above, which is only what the bot says out loud.
+          </p>
+        </div>
       </fieldset>
 
       <fieldset>
@@ -262,6 +271,7 @@ var LANGUAGES = [
 
 var agents = [];
 var tools = [];
+var organisations = [];
 // What the server fills in for a field nobody sets. Seeds the new-agent form.
 var defaults = { key: "", voices: { "hi-IN": "hi-IN:priya" }, tools: [] };
 // The profile as the server last gave it to us. PUT replaces the whole profile
@@ -378,6 +388,22 @@ function readVoices() {
 
 // -- tools ------------------------------------------------------------------
 
+// Only a platform administrator may choose; for everyone else the server uses
+// their own organisation whatever the form sends, so offering the choice would
+// be offering something that cannot happen.
+function drawOwner(current) {
+  var user = window.vaaniAuth.user;
+  var mayChoose = user && user.role === "platform_admin";
+  el("ownerField").hidden = !mayChoose || organisations.length === 0;
+  if (el("ownerField").hidden) { return; }
+  el("owner").innerHTML =
+    '<option value="">— none: answers, but belongs to no organisation —</option>' +
+    organisations.map(function (o) {
+      return '<option value="' + o.id + '"' +
+        (o.id === current ? " selected" : "") + ">" + esc(o.name) + "</option>";
+    }).join("");
+}
+
 function drawTools(chosen) {
   el("noTools").hidden = tools.length > 0;
   el("tools").innerHTML = tools.map(function (t) {
@@ -417,6 +443,7 @@ function show(profile, isNew) {
   el("ask_language").checked = !!profile.ask_language;
   drawVoices(profile.voices);
   drawTools(profile.tools || []);
+  drawOwner(profile.organisation_id);
 
   el("promptBox").hidden = !profile.system_prompt;
   el("prompt").textContent = profile.system_prompt || "";
@@ -468,8 +495,12 @@ el("form").addEventListener("submit", async function (e) {
     toast("An agent needs a key.", true);
     return;
   }
+  var query = "";
+  if (!el("ownerField").hidden && el("owner").value) {
+    query = "?organisation_id=" + encodeURIComponent(el("owner").value);
+  }
   try {
-    await send("PUT", "/api/agents/" + encodeURIComponent(payload.key), payload);
+    await send("PUT", "/api/agents/" + encodeURIComponent(payload.key) + query, payload);
     // Read it back rather than keeping the payload. A new agent's unshown
     // fields were filled in by the server, and `loaded` is what the next save
     // merges over — so it has to be the server's copy, not our guess at it.
@@ -525,6 +556,11 @@ async function load() {
     tools = await send("GET", "/api/tools");
   } catch (e) {
     tools = [];  // a deployment with none is normal; the section just stays empty
+  }
+  try {
+    organisations = await send("GET", "/api/organisations");
+  } catch (e) {
+    organisations = [];  // a viewer, or a deployment with none yet
   }
   try {
     defaults = await send("GET", "/api/agent-defaults");
