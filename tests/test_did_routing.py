@@ -175,8 +175,13 @@ async def _ask(svc, called: str, question: str) -> list[str]:
     from vaani.agent.tools.base import ToolContext
     from vaani.agent.tools.builtin import search_knowledge
 
-    _organisation_id, agent_key = await _route(svc, called)
-    ctx = ToolContext(call_id="probe", agent_key=agent_key, services=svc.as_tool_services())
+    organisation_id, agent_key = await _route(svc, called)
+    ctx = ToolContext(
+        call_id="probe",
+        agent_key=agent_key,
+        organisation_id=organisation_id,
+        services=svc.as_tool_services(),
+    )
     result = await search_knowledge(question, ctx)
     return [] if not result.ok else list(result.data["sources"])
 
@@ -232,3 +237,68 @@ async def test_an_unmapped_number_answers_from_the_fallback_agents_training(worl
     await _train(svc, "health-admissions", "Admission fees for 2026 are 45,000 rupees.", "fees.pdf")
 
     assert await _ask(svc, "+919999999999", "admission fees") == []
+
+
+# -- the organisation's shared set, reached by the number dialled -------------
+
+
+async def test_a_number_reaches_its_organisations_shared_documents(world):
+    """What was asked for: the DID says which organisation, and the caller is
+    answered from that organisation's set without anyone having to load the
+    same circular onto each of its lines."""
+    svc, health, _wb = world
+    await svc.retriever.index_text(
+        "Office hours are 10 am to 5 pm.", source="hours.pdf", organisation_id=health.id
+    )
+
+    for number in ("+918065605871", "+918065605872", "+918065605873"):
+        assert await _ask(svc, number, "what are the office hours") == ["hours.pdf"], (
+            f"{number} could not reach its organisation's shared set"
+        )
+
+
+async def test_the_shared_set_stops_at_the_organisation_boundary(world):
+    """Three numbers reach the university and two the state portal. Neither
+    organisation's shared set may be read on the other's numbers."""
+    svc, health, wb = world
+    await svc.retriever.index_text(
+        "Office hours are 10 am to 5 pm.", source="hours.pdf", organisation_id=health.id
+    )
+    await svc.retriever.index_text(
+        "Counters open at 11 am.", source="counters.pdf", organisation_id=wb.id
+    )
+
+    # Each number finds its own organisation's document, asked in that
+    # document's own words, and cannot reach the other's at all.
+    assert await _ask(svc, "+918065605871", "what are the office hours") == ["hours.pdf"]
+    assert await _ask(svc, "+918065605874", "when do counters open") == ["counters.pdf"]
+
+    assert "counters.pdf" not in await _ask(svc, "+918065605871", "when do counters open")
+    assert "hours.pdf" not in await _ask(svc, "+918065605874", "what are the office hours")
+
+
+async def test_a_line_keeps_its_own_documents_off_its_siblings(world):
+    """…871 and …873 are the same university but different lines. The shared
+    set is common; what is loaded onto one line is not."""
+    svc, health, _wb = world
+    await svc.retriever.index_text(
+        "Examinations begin on 12 November.", source="timetable.pdf", agent_key="health-exams"
+    )
+    await svc.retriever.index_text(
+        "Office hours are 10 am to 5 pm.", source="hours.pdf", organisation_id=health.id
+    )
+
+    assert "timetable.pdf" in await _ask(svc, "+918065605873", "when do examinations begin")
+    assert "timetable.pdf" not in await _ask(svc, "+918065605871", "when do examinations begin")
+    assert "hours.pdf" in await _ask(svc, "+918065605871", "what are the office hours")
+
+
+async def test_an_unmapped_number_reaches_no_organisations_shared_set(world):
+    """It is answered, by the fallback agent, and belongs to no customer. It
+    must not inherit one's documents on the way."""
+    svc, health, _wb = world
+    await svc.retriever.index_text(
+        "Office hours are 10 am to 5 pm.", source="hours.pdf", organisation_id=health.id
+    )
+
+    assert await _ask(svc, "+919999999999", "what are the office hours") == []

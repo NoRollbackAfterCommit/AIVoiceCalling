@@ -44,7 +44,9 @@ async def search_knowledge(query: str, ctx: ToolContext) -> ToolResult:
     if retriever is None:
         return ToolResult(content="No knowledge base is configured.", ok=False)
 
-    hits = await retriever.search(query, agent_key=ctx.agent_key)
+    hits = await retriever.search(
+        query, agent_key=ctx.agent_key, organisation_id=ctx.organisation_id
+    )
     if not hits:
         return ToolResult(content="No relevant information found in the knowledge base.", ok=False)
 

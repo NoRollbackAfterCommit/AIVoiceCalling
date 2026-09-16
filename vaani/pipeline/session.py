@@ -220,6 +220,7 @@ class CallSession:
             call_id=self.call_id,
             caller_number=caller_number,
             agent_key=agent_key,
+            organisation_id=organisation_id,
             services=services.as_tool_services(),
         )
         self._agent = ConversationAgent(

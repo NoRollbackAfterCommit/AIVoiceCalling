@@ -91,11 +91,36 @@ class Retriever:
             extra={"embedder": self._embedder.name, "dim": dim, "min_score": self._min_score},
         )
 
+    # -- scopes -------------------------------------------------------------
+
+    @staticmethod
+    def namespace(agent_key: str = "default", organisation_id: int | None = None) -> str:
+        """Which partition a document lives in.
+
+        Two kinds, and a caller reads from both. An organisation's own set is
+        shared by every line it runs — the fee schedule uploaded once for a
+        university — and a line's set is its alone, so an admissions caller is
+        never read the examination timetable.
+
+        `organisation_id` wins when given, because passing one is how a caller
+        says "the shared set" rather than a line's. The prefix cannot collide
+        with a line: an agent key is validated to letters, digits, hyphen and
+        underscore, so none of them can contain a colon.
+        """
+        return f"org:{organisation_id}" if organisation_id is not None else agent_key
+
     # -- write --------------------------------------------------------------
 
-    async def index_chunks(self, chunks: list[Chunk], *, agent_key: str = "default") -> int:
+    async def index_chunks(
+        self,
+        chunks: list[Chunk],
+        *,
+        agent_key: str = "default",
+        organisation_id: int | None = None,
+    ) -> int:
         if not chunks:
             return 0
+        ns = self.namespace(agent_key, organisation_id)
 
         # A source name is the document, so indexing it again means it was
         # corrected. Neither store replaces on its own — the memory one extends
@@ -105,15 +130,15 @@ class Retriever:
         # batch, or the second batch would delete the first.
         replaced = 0
         for source in dict.fromkeys(c.source for c in chunks):
-            replaced += await self._store.delete_source(source, namespace=agent_key)
+            replaced += await self._store.delete_source(source, namespace=ns)
 
         # Embed in batches: a 500-page circular in one call will OOM the GPU.
         total = 0
         for start in range(0, len(chunks), 64):
             batch = chunks[start : start + 64]
             vectors = await self._embedder.embed([c.text for c in batch])
-            total += await self._store.upsert(batch, vectors, namespace=agent_key)
-        log.info("indexed", extra={"chunks": total, "replaced": replaced, "agent": agent_key})
+            total += await self._store.upsert(batch, vectors, namespace=ns)
+        log.info("indexed", extra={"chunks": total, "replaced": replaced, "scope": ns})
         return total
 
     async def index_text(
@@ -122,38 +147,83 @@ class Retriever:
         source: str,
         *,
         agent_key: str = "default",
+        organisation_id: int | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> int:
         return await self.index_chunks(
-            chunk_text(text, source=source, metadata=metadata), agent_key=agent_key
+            chunk_text(text, source=source, metadata=metadata),
+            agent_key=agent_key,
+            organisation_id=organisation_id,
         )
 
-    async def index_paths(self, paths: list[Path], *, agent_key: str = "default") -> int:
+    async def index_paths(
+        self,
+        paths: list[Path],
+        *,
+        agent_key: str = "default",
+        organisation_id: int | None = None,
+    ) -> int:
         chunks = await asyncio.to_thread(chunk_files, paths)
-        return await self.index_chunks(chunks, agent_key=agent_key)
+        return await self.index_chunks(chunks, agent_key=agent_key, organisation_id=organisation_id)
 
-    async def delete_source(self, source: str, *, agent_key: str = "default") -> int:
-        return await self._store.delete_source(source, namespace=agent_key)
+    async def delete_source(
+        self,
+        source: str,
+        *,
+        agent_key: str = "default",
+        organisation_id: int | None = None,
+    ) -> int:
+        return await self._store.delete_source(
+            source, namespace=self.namespace(agent_key, organisation_id)
+        )
 
-    async def count(self, agent_key: str | None = None) -> int:
-        return await self._store.count(agent_key)
+    async def count(self, agent_key: str | None = None, organisation_id: int | None = None) -> int:
+        if agent_key is None and organisation_id is None:
+            return await self._store.count(None)
+        return await self._store.count(self.namespace(agent_key or "default", organisation_id))
 
-    async def sources(self, *, agent_key: str = "default") -> list[tuple[str, int]]:
-        return await self._store.sources(agent_key)
+    async def sources(
+        self, *, agent_key: str = "default", organisation_id: int | None = None
+    ) -> list[tuple[str, int]]:
+        return await self._store.sources(self.namespace(agent_key, organisation_id))
 
     # -- read ---------------------------------------------------------------
 
     async def search(
-        self, query: str, *, agent_key: str = "default", top_k: int | None = None
+        self,
+        query: str,
+        *,
+        agent_key: str = "default",
+        organisation_id: int | None = None,
+        top_k: int | None = None,
     ) -> list[SearchHit]:
+        """What this caller's line is allowed to answer from.
+
+        Two partitions, searched together and ranked as one: the line's own
+        documents and the organisation's shared set. A line with no
+        organisation — the fallback agent on an unmapped number — reads only
+        its own, because an unconfigured number belongs to no customer and must
+        not fall into one's documents.
+
+        Two queries rather than one because the store partitions by a single
+        namespace. The cost is one extra round trip on a call that already
+        waits on an LLM, and the alternative is a scan across every customer's
+        corpus with a filter afterwards.
+        """
         if not self._ready or not query.strip():
             return []
         k = top_k or self._top_k
+        scopes = [agent_key]
+        if organisation_id is not None:
+            scopes.append(self.namespace(organisation_id=organisation_id))
+
         # Over-fetch, then rerank and diversify down to k.
         vector = (await self._embedder.embed([query]))[0]
-        hits = await self._store.search(
-            vector, namespace=agent_key, top_k=k * 3, min_score=self._min_score * 0.6
-        )
+        hits: list[SearchHit] = []
+        for scope in scopes:
+            hits += await self._store.search(
+                vector, namespace=scope, top_k=k * 3, min_score=self._min_score * 0.6
+            )
         if not hits:
             return []
         reranked = self._rerank(query, hits)

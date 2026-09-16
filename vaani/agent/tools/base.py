@@ -33,6 +33,10 @@ class ToolContext:
     call_id: str
     caller_number: str | None = None
     agent_key: str = "default"
+    # Which customer this line belongs to. Decides the shared knowledge the
+    # agent may read alongside its own; None for an unmapped number, which
+    # belongs to nobody and must not reach a customer's documents.
+    organisation_id: int | None = None
     language: str = "en"
     # Scratch space shared across tools within one call, e.g. a verified
     # consumer number established by an earlier tool.

@@ -12,7 +12,7 @@ import io
 import time
 from dataclasses import asdict
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Body, File, HTTPException, Query, Request, Response, UploadFile
 from pydantic import BaseModel, Field
@@ -72,8 +72,15 @@ async def ready(request: Request) -> dict[str, Any]:
 _DEFAULTS = AgentProfile(key="_")
 
 
+# The shape the console has always told operators to use, now enforced. It also
+# keeps an agent key from colliding with the `org:<id>` namespace the shared
+# knowledge set lives in — an agent allowed to be called `org:1` would write
+# straight into a customer's shared documents.
+AGENT_KEY = r"^[a-z0-9][a-z0-9_-]*$"
+
+
 class AgentProfileIn(BaseModel):
-    key: str = Field(min_length=1, max_length=64)
+    key: str = Field(min_length=1, max_length=64, pattern=AGENT_KEY)
     name: str = _DEFAULTS.name
     organisation: str = _DEFAULTS.organisation
     role: str = _DEFAULTS.role
@@ -323,19 +330,50 @@ class TextIngest(BaseModel):
     text: str = Field(min_length=1)
     source: str = "manual-entry"
     agent_key: str = "default"
+    # "agent" puts the document on this line alone; "organisation" puts it in
+    # the set every line of that agent's organisation reads.
+    scope: Literal["agent", "organisation"] = "agent"
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+def _scope_of(request: Request, agent_key: str, scope: str) -> int | None:
+    """The organisation to file a document under, or None for the line itself.
+
+    Ownership is read off the agent, never taken from the request: the caller
+    names a line they are allowed to touch, and which organisation that line
+    belongs to is not theirs to assert. Writing into another organisation's
+    corpus is putting words in their bot's mouth.
+    """
+    profile = _owned_agent(request, agent_key)
+    if scope != "organisation":
+        return None
+    owner = getattr(profile, "organisation_id", None)
+    if owner is None:
+        raise HTTPException(
+            400,
+            f"Agent {agent_key!r} belongs to no organisation, so it has no shared set. "
+            "Map it to one first, or file this against the agent itself.",
+        )
+    return owner
 
 
 @router.post("/knowledge/text", tags=["knowledge"])
 async def ingest_text(body: TextIngest, request: Request) -> dict[str, Any]:
-    # Writing into another organisation's corpus is putting words in their
-    # bot's mouth, so the agent is checked before a single chunk is embedded.
-    _owned_agent(request, body.agent_key)
+    organisation_id = _scope_of(request, body.agent_key, body.scope)
     retriever = request.app.state.services.retriever
     count = await retriever.index_text(
-        body.text, source=body.source, agent_key=body.agent_key, metadata=body.metadata
+        body.text,
+        source=body.source,
+        agent_key=body.agent_key,
+        organisation_id=organisation_id,
+        metadata=body.metadata,
     )
-    return {"indexed_chunks": count, "source": body.source, "agent_key": body.agent_key}
+    return {
+        "indexed_chunks": count,
+        "source": body.source,
+        "agent_key": body.agent_key,
+        "scope": body.scope,
+    }
 
 
 @router.post("/knowledge/upload", tags=["knowledge"])
@@ -343,11 +381,12 @@ async def ingest_file(
     request: Request,
     file: UploadFile = File(...),
     agent_key: str = Query("default"),
+    scope: Literal["agent", "organisation"] = Query("agent"),
 ) -> dict[str, Any]:
     import tempfile
     from pathlib import Path
 
-    _owned_agent(request, agent_key)
+    organisation_id = _scope_of(request, agent_key, scope)
     suffix = Path(file.filename or "upload.txt").suffix or ".txt"
     raw = await file.read()
     if len(raw) > 64 * 1024 * 1024:
@@ -361,13 +400,20 @@ async def ingest_file(
 
         text = load_file(tmp_path)
         chunks = chunk_text(text, source=file.filename or tmp_path.name)
-        count = await request.app.state.services.retriever.index_chunks(chunks, agent_key=agent_key)
+        count = await request.app.state.services.retriever.index_chunks(
+            chunks, agent_key=agent_key, organisation_id=organisation_id
+        )
     except ValueError as exc:
         raise HTTPException(415, str(exc)) from exc
     finally:
         tmp_path.unlink(missing_ok=True)
 
-    return {"indexed_chunks": count, "source": file.filename, "agent_key": agent_key}
+    return {
+        "indexed_chunks": count,
+        "source": file.filename,
+        "agent_key": agent_key,
+        "scope": scope,
+    }
 
 
 @router.get("/knowledge/search", tags=["knowledge"])
@@ -379,8 +425,15 @@ async def search_knowledge(
 ) -> dict[str, Any]:
     """Exposed so operators can test retrieval quality without placing a call —
     the fastest way to diagnose 'the agent gave a wrong answer'."""
-    _owned_agent(request, agent_key)
-    hits = await request.app.state.services.retriever.search(q, agent_key=agent_key, top_k=top_k)
+    profile = _owned_agent(request, agent_key)
+    # Both scopes, because that is what a real call reads; a preview that
+    # searched only the line would not show what the caller would be told.
+    hits = await request.app.state.services.retriever.search(
+        q,
+        agent_key=agent_key,
+        organisation_id=getattr(profile, "organisation_id", None),
+        top_k=top_k,
+    )
     return {
         "query": q,
         "hits": [
@@ -392,19 +445,46 @@ async def search_knowledge(
 
 @router.delete("/knowledge/source/{source}", tags=["knowledge"])
 async def delete_source(
-    source: str, request: Request, agent_key: str = "default"
+    source: str,
+    request: Request,
+    agent_key: str = "default",
+    scope: Literal["agent", "organisation"] = "agent",
 ) -> dict[str, Any]:
-    _owned_agent(request, agent_key)
-    removed = await request.app.state.services.retriever.delete_source(source, agent_key=agent_key)
-    return {"source": source, "removed_chunks": removed}
+    organisation_id = _scope_of(request, agent_key, scope)
+    removed = await request.app.state.services.retriever.delete_source(
+        source, agent_key=agent_key, organisation_id=organisation_id
+    )
+    return {"source": source, "removed_chunks": removed, "scope": scope}
 
 
 @router.get("/knowledge/sources", tags=["knowledge"])
-async def knowledge_sources(request: Request, agent_key: str = "default") -> list[dict[str, Any]]:
-    """What is actually indexed, so an operator is not uploading blind."""
-    _owned_agent(request, agent_key)
-    pairs = await request.app.state.services.retriever.sources(agent_key=agent_key)
-    return [{"source": source, "chunks": chunks} for source, chunks in pairs]
+async def knowledge_sources(
+    request: Request,
+    agent_key: str = "default",
+    scope: Literal["agent", "organisation", "both"] = "both",
+) -> list[dict[str, Any]]:
+    """What is actually indexed, so an operator is not uploading blind.
+
+    Both scopes by default, each row saying which it came from: the question an
+    operator is really asking is "what can this line answer from", and half an
+    answer to that is how a document gets uploaded twice.
+    """
+    profile = _owned_agent(request, agent_key)
+    owner = getattr(profile, "organisation_id", None)
+    retriever = request.app.state.services.retriever
+
+    rows: list[dict[str, Any]] = []
+    if scope in ("agent", "both"):
+        rows += [
+            {"source": source, "chunks": chunks, "scope": "agent"}
+            for source, chunks in await retriever.sources(agent_key=agent_key)
+        ]
+    if scope in ("organisation", "both") and owner is not None:
+        rows += [
+            {"source": source, "chunks": chunks, "scope": "organisation"}
+            for source, chunks in await retriever.sources(organisation_id=owner)
+        ]
+    return rows
 
 
 @router.get("/knowledge/stats", tags=["knowledge"])
