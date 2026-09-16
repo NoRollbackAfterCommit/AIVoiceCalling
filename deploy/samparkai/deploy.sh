@@ -5,9 +5,10 @@
 #
 # Ships exactly what is committed (git archive of HEAD: no venv, no data, no
 # keys), generates deploy/samparkai/.env on the box with a fresh API token the
-# first time, adds the SamparkAI site to the host Caddy that already fronts
-# the box, then builds and starts the app. Re-running redeploys the current
-# HEAD and keeps the existing .env and data volume.
+# first time and prints it only on that run, adds the SamparkAI site to the
+# host Caddy that already fronts the box, then builds and starts the app.
+# Re-running redeploys the current HEAD and keeps the existing .env and data
+# volume.
 set -euo pipefail
 
 TARGET=${1:?usage: deploy.sh user@host [key.pem]}
@@ -28,7 +29,11 @@ echo "==> configuring and starting"
 set -euo pipefail
 cd /opt/samparkai/deploy/samparkai
 
+# Whether this run created the token. That is the only run that may print it.
+FRESH_TOKEN=no
+
 if [ ! -f .env ]; then
+  FRESH_TOKEN=yes
   TOKEN=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))' 2>/dev/null \
           || openssl rand -hex 32)
   cat > .env <<ENV
@@ -72,8 +77,17 @@ for _ in $(seq 1 30); do
   sleep 2
 done
 echo
-echo "API token (also in /opt/samparkai/deploy/samparkai/.env):"
-grep '^VAANI_API_TOKEN=' .env | cut -d= -f2-
+# Printed only on the run that generates it. Every later deploy echoed the
+# token again, so a live credential accumulated in terminal scrollback, and
+# in the log of anything that ran this, for a value that had not changed
+# since the first deploy and is readable on the box by whoever can deploy.
+if [ "$FRESH_TOKEN" = yes ]; then
+  echo "API token, generated just now (also in deploy/samparkai/.env):"
+  grep '^VAANI_API_TOKEN=' .env | cut -d= -f2-
+else
+  echo "API token unchanged. To read it on the box:"
+  echo "  grep '^VAANI_API_TOKEN=' /opt/samparkai/deploy/samparkai/.env"
+fi
 echo
 echo "Console: https://samparkai.demosites.co.in/  once DNS points at this box;"
 echo "         Caddy fetches the certificate by itself when it does."
