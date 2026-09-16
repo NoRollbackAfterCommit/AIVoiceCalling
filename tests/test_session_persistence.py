@@ -13,9 +13,9 @@ from vaani.api.routes import get_call
 from vaani.config import Settings
 from vaani.core.registry import build_services
 from vaani.db.repository import CallRepository
-from vaani.pipeline.session import CallSession
+from vaani.pipeline.session import CallSession, CallState
 
-from .test_pipeline import FakeTransport, silence, tone
+from .test_pipeline import FakeTransport, settle, silence, tone
 
 
 def _settings() -> Settings:
@@ -45,12 +45,43 @@ async def services_with_db(tmp_path):
     await svc.calls.close()
 
 
+def _replied(session: CallSession) -> bool:
+    """The agent has produced a reply for the turn just pushed.
+
+    Either the turn is already on the record, or the reply is being played and
+    the hangup below will finalise it. Waiting for the record alone would mean
+    waiting out the whole reply at real time — about five seconds of mock audio
+    — in every test that drives a turn.
+    """
+    return bool(session.record.turns) or session.state == CallState.SPEAKING
+
+
 async def _run_one_turn(session: CallSession) -> None:
+    """Drive one complete caller turn, then hang up.
+
+    Waits on the session reaching each step rather than on a duration. The
+    fixed sleeps this replaces were 0.1 s for the greeting and 0.8 s for the
+    reply; on a machine under load — which is any machine running the whole
+    suite — the agent was still thinking when the hangup landed, so the call
+    was stored with no turns and whichever test read them first failed.
+    """
     task = asyncio.create_task(session.run())
-    await asyncio.sleep(0.1)
-    await session.push_audio(tone(700))
-    await session.push_audio(silence(500))
-    await asyncio.sleep(0.8)
+    try:
+        reached = await settle(lambda: session.state == CallState.LISTENING)
+        assert reached, f"greeting never finished; state is {session.state}"
+
+        await session.push_audio(tone(700))
+        await session.push_audio(silence(500))
+        assert await settle(lambda: _replied(session)), (
+            f"the utterance produced no reply; state is {session.state}"
+        )
+    except BaseException:
+        # Without this the session task outlives a failed assertion and the
+        # fixture's close() waits on it forever, so pytest hangs before it can
+        # print why the assertion failed.
+        task.cancel()
+        raise
+
     await session.hangup("completed")
     await asyncio.wait_for(task, timeout=10)
 

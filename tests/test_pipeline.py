@@ -47,7 +47,7 @@ def silence(ms: int) -> bytes:
     return b"\x00\x00" * int(SAMPLE_RATE * ms / 1000)
 
 
-async def _settle(predicate, timeout: float = 5.0) -> bool:
+async def settle(predicate, timeout: float = 5.0) -> bool:
     """Poll until `predicate` holds. The pipeline paces playback against the
     wall clock, so how long a step takes varies with the machine; a fixed sleep
     either flakes or pads the suite."""
@@ -423,11 +423,11 @@ async def test_an_uninterrupted_reply_is_not_recorded_as_barge_in(services):
     session = _brisk_call(services, transport)
     task = asyncio.create_task(session.run())
 
-    assert await _settle(lambda: session.state == CallState.LISTENING), "greeting never finished"
+    assert await settle(lambda: session.state == CallState.LISTENING), "greeting never finished"
 
     await session.push_audio(tone(700))
     await session.push_audio(silence(500))
-    assert await _settle(lambda: bool(session.record.turns)), "the utterance produced no turn"
+    assert await settle(lambda: bool(session.record.turns)), "the utterance produced no turn"
 
     assert not transport.of_type("barge_in"), "nothing was spoken over the agent"
     assert session.record.turns[0]["metrics"]["barged_in"] is False
@@ -443,23 +443,23 @@ async def test_an_interrupted_reply_is_recorded_as_barge_in(services):
     session = _brisk_call(services, transport)
     task = asyncio.create_task(session.run())
 
-    assert await _settle(lambda: session.state == CallState.LISTENING), "greeting never finished"
+    assert await settle(lambda: session.state == CallState.LISTENING), "greeting never finished"
 
     await session.push_audio(tone(700))
     await session.push_audio(silence(500))
-    assert await _settle(lambda: session.state == CallState.SPEAKING), "the agent never replied"
+    assert await settle(lambda: session.state == CallState.SPEAKING), "the agent never replied"
 
     # Wait for audio to actually reach the caller before talking over it. SPEAKING
     # begins when the reply is ready, not when it is audible, and barge-in
     # deliberately ignores anything sent in that gap.
     silent_at = len(transport.audio)
-    assert await _settle(lambda: len(transport.audio) > silent_at), "the reply never started"
+    assert await settle(lambda: len(transport.audio) > silent_at), "the reply never started"
 
     for _ in range(30):  # 600 ms over the top of the reply
         await session.push_audio(tone(20))
         await asyncio.sleep(0.005)
 
-    assert await _settle(lambda: bool(session.record.turns)), "the turn was never recorded"
+    assert await settle(lambda: bool(session.record.turns)), "the turn was never recorded"
     assert transport.of_type("barge_in"), "interrupting the reply must fire barge-in"
     assert session.record.turns[0]["metrics"]["barged_in"] is True
 
@@ -501,11 +501,11 @@ async def test_noise_before_a_reply_is_audible_does_not_cancel_it(services):
     services.tts = _LateFirstChunkTTS(services.tts, 0.4)
     task = asyncio.create_task(session.run())
 
-    assert await _settle(lambda: session.state == CallState.LISTENING), "greeting never finished"
+    assert await settle(lambda: session.state == CallState.LISTENING), "greeting never finished"
 
     await session.push_audio(tone(700))
     await session.push_audio(silence(500))
-    assert await _settle(lambda: session.state == CallState.SPEAKING), "the agent never replied"
+    assert await settle(lambda: session.state == CallState.SPEAKING), "the agent never replied"
 
     audio_before = len(transport.audio)
     for _ in range(15):  # 300 ms of noise while the line is still silent
@@ -513,7 +513,7 @@ async def test_noise_before_a_reply_is_audible_does_not_cancel_it(services):
         await asyncio.sleep(0.005)
 
     assert not transport.of_type("barge_in"), "cancelled a reply the caller could not yet hear"
-    assert await _settle(lambda: len(transport.audio) > audio_before), "the reply was never spoken"
+    assert await settle(lambda: len(transport.audio) > audio_before), "the reply was never spoken"
 
     await session.hangup()
     await asyncio.wait_for(task, timeout=5)
@@ -549,7 +549,7 @@ async def test_a_reply_that_produced_no_audio_is_announced_not_just_logged(servi
     services.tts = _FailingTTS()
     task = asyncio.create_task(session.run())
 
-    assert await _settle(lambda: bool(transport.of_type("reply_silent"))), (
+    assert await settle(lambda: bool(transport.of_type("reply_silent"))), (
         "a reply that reached the caller as silence was never announced"
     )
     event = transport.of_type("reply_silent")[0]
@@ -565,7 +565,7 @@ async def test_a_reply_that_was_heard_is_not_announced_as_silent(services):
     session = CallSession(transport, services)
     task = asyncio.create_task(session.run())
 
-    assert await _settle(lambda: session.state == CallState.LISTENING), "greeting never finished"
+    assert await settle(lambda: session.state == CallState.LISTENING), "greeting never finished"
     assert transport.audio, "the greeting produced no audio at all"
     assert not transport.of_type("reply_silent")
 

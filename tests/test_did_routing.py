@@ -160,3 +160,75 @@ async def test_a_live_call_says_which_organisation_it_belongs_to(world):
     row = manager.live()[0]
     assert row["organisation_id"] == health.id
     assert row["did"] == "+918065605873"
+
+
+# -- what the agent on that number actually answers from ---------------------
+
+
+async def _train(svc, agent_key: str, text: str, source: str) -> None:
+    await svc.retriever.index_text(text, source=source, agent_key=agent_key)
+
+
+async def _ask(svc, called: str, question: str) -> list[str]:
+    """Route a number the way a real call does, then run the agent's own
+    knowledge lookup with the context that call would carry."""
+    from vaani.agent.tools.base import ToolContext
+    from vaani.agent.tools.builtin import search_knowledge
+
+    _organisation_id, agent_key = await _route(svc, called)
+    ctx = ToolContext(call_id="probe", agent_key=agent_key, services=svc.as_tool_services())
+    result = await search_knowledge(question, ctx)
+    return [] if not result.ok else list(result.data["sources"])
+
+
+async def test_a_number_answers_from_its_own_training_and_no_one_elses(world):
+    """Module-wise training, end to end and from the caller's side.
+
+    The pieces were each tested alone — a number resolves to an agent, and a
+    corpus is stored under an agent's namespace — but nothing joined them up.
+    This is the join: dial a health number and the fee circular is reachable;
+    dial the state portal's number and it is not, because that agent was never
+    taught it.
+    """
+    svc, _health, _wb = world
+    await _train(svc, "health-admissions", "Admission fees for 2026 are 45,000 rupees.", "fees.pdf")
+    await _train(svc, "wb-general", "Ration card renewal takes fifteen working days.", "ration.pdf")
+
+    assert await _ask(svc, "+918065605871", "what are the admission fees") == ["fees.pdf"]
+    assert await _ask(svc, "+918065605874", "how long does ration card renewal take") == [
+        "ration.pdf"
+    ]
+
+
+async def test_a_number_cannot_reach_another_domains_documents(world):
+    """The failure that would matter: a caller to the state portal being read
+    the university's fee schedule, or the other way round. Both corpora hold an
+    answer to the other's question; only the agent's own namespace is searched.
+    """
+    svc, _health, _wb = world
+    await _train(svc, "health-admissions", "Admission fees for 2026 are 45,000 rupees.", "fees.pdf")
+    await _train(svc, "wb-general", "Ration card renewal takes fifteen working days.", "ration.pdf")
+
+    assert "ration.pdf" not in await _ask(svc, "+918065605871", "ration card renewal")
+    assert "fees.pdf" not in await _ask(svc, "+918065605874", "admission fees")
+
+
+async def test_two_numbers_pointed_at_one_agent_share_its_training(world):
+    """…871 and …872 both answer as health-admissions, so a document uploaded
+    once serves both lines. That is the point of mapping numbers to an agent
+    rather than to a corpus of their own."""
+    svc, _health, _wb = world
+    await _train(svc, "health-admissions", "Admission fees for 2026 are 45,000 rupees.", "fees.pdf")
+
+    assert await _ask(svc, "+918065605871", "admission fees") == ["fees.pdf"]
+    assert await _ask(svc, "+918065605872", "admission fees") == ["fees.pdf"]
+
+
+async def test_an_unmapped_number_answers_from_the_fallback_agents_training(world):
+    """An unmapped number is still answered, and must not fall through into
+    somebody's corpus. It gets the fallback agent's own, which is usually empty
+    — and empty is the right answer, not another customer's documents."""
+    svc, _health, _wb = world
+    await _train(svc, "health-admissions", "Admission fees for 2026 are 45,000 rupees.", "fees.pdf")
+
+    assert await _ask(svc, "+919999999999", "admission fees") == []
