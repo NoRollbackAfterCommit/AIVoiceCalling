@@ -96,13 +96,24 @@ class Retriever:
     async def index_chunks(self, chunks: list[Chunk], *, agent_key: str = "default") -> int:
         if not chunks:
             return 0
+
+        # A source name is the document, so indexing it again means it was
+        # corrected. Neither store replaces on its own — the memory one extends
+        # its bucket and Qdrant mints a fresh id per chunk — so without this the
+        # superseded text stays searchable beside its replacement and the bot
+        # can quote last year's circular. Cleared once up front rather than per
+        # batch, or the second batch would delete the first.
+        replaced = 0
+        for source in dict.fromkeys(c.source for c in chunks):
+            replaced += await self._store.delete_source(source, namespace=agent_key)
+
         # Embed in batches: a 500-page circular in one call will OOM the GPU.
         total = 0
         for start in range(0, len(chunks), 64):
             batch = chunks[start : start + 64]
             vectors = await self._embedder.embed([c.text for c in batch])
             total += await self._store.upsert(batch, vectors, namespace=agent_key)
-        log.info("indexed", extra={"chunks": total, "agent": agent_key})
+        log.info("indexed", extra={"chunks": total, "replaced": replaced, "agent": agent_key})
         return total
 
     async def index_text(
