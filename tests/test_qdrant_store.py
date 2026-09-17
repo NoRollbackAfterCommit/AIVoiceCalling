@@ -61,3 +61,57 @@ async def test_the_namespace_and_threshold_reach_the_query():
     assert call["limit"] == 3
     assert call["score_threshold"] == 0.4
     assert call["query_filter"] is not None, "namespaces must not leak across agents"
+
+
+# -- the collection's dimensions must match the embedder ---------------------
+
+
+class _CollectionsFake:
+    """A client whose collection already exists, at a fixed vector size."""
+
+    def __init__(self, dim: int) -> None:
+        self.dim = dim
+        self.created = False
+
+    async def get_collections(self):
+        return SimpleNamespace(collections=[SimpleNamespace(name="vaani")])
+
+    async def get_collection(self, collection_name):
+        params = SimpleNamespace(size=self.dim, distance="Cosine")
+        return SimpleNamespace(config=SimpleNamespace(params=SimpleNamespace(vectors=params)))
+
+    async def create_collection(self, **kwargs):
+        self.created = True
+
+
+async def test_an_existing_collection_of_the_right_size_is_left_alone():
+    store = QdrantVectorStore(collection="vaani")
+    store._client = _CollectionsFake(dim=384)
+
+    await store.ensure(384)
+
+    assert store._client.created is False, "the corpus must not be recreated on every boot"
+
+
+async def test_changing_the_embedder_under_an_existing_collection_is_refused():
+    """Switching embeddings changes the vector width — 384 for the hash
+    embedder, 1536 for OpenAI's small model. Qdrant fixes that width when the
+    collection is made and `ensure` returned early whenever the collection
+    existed, so the change was accepted in the settings page and then every
+    upsert and every search failed at the Qdrant API.
+
+    From the caller's side that is indistinguishable from an empty knowledge
+    base: the agent just says it does not have the information.
+    """
+    store = QdrantVectorStore(collection="vaani")
+    store._client = _CollectionsFake(dim=384)
+
+    try:
+        await store.ensure(1536)
+    except RuntimeError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("a mismatched collection must not be used")
+
+    assert "384" in message and "1536" in message, message
+    assert "vaani" in message, "say which collection, so it can be dealt with"

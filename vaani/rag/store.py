@@ -131,6 +131,22 @@ class QdrantVectorStore:
 
         existing = await self._client.get_collections()
         if self._collection in {c.name for c in existing.collections}:
+            # Qdrant fixes the vector width when the collection is made, and
+            # changing the embedder changes that width — 384 for the hash
+            # embedder, 1536 for OpenAI's small model. This used to return here
+            # regardless, so the new setting was accepted and then every upsert
+            # and every search failed at the API. From the caller's side that is
+            # indistinguishable from an empty knowledge base: the agent simply
+            # says it does not have the information.
+            found = await self._dimension()
+            if found is not None and found != dim:
+                raise RuntimeError(
+                    f"Qdrant collection {self._collection!r} holds {found}-dimension "
+                    f"vectors but the configured embedder produces {dim}. They were "
+                    "indexed by a different embedder. Either put the previous one "
+                    f"back, or delete the {self._collection!r} collection and upload "
+                    "the documents again — switching embedders cannot reuse vectors."
+                )
             return
         await self._client.create_collection(
             collection_name=self._collection,
@@ -150,6 +166,26 @@ class QdrantVectorStore:
             field_schema=PayloadSchemaType.KEYWORD,
         )
         log.info("created qdrant collection", extra={"collection": self._collection, "dim": dim})
+
+    async def _dimension(self) -> int | None:
+        """The width the collection was created with, or None if it cannot be
+        read. Unreadable is not a reason to refuse to start — an older client,
+        or a response shape we do not know, must not take a working deployment
+        down over a check."""
+        try:
+            info = await self._client.get_collection(collection_name=self._collection)
+            vectors = info.config.params.vectors
+            size = getattr(vectors, "size", None)
+            if size is None and isinstance(vectors, dict):
+                # Named-vector collections: every vector shares one width here.
+                size = next((getattr(v, "size", None) for v in vectors.values()), None)
+            return int(size) if size is not None else None
+        except Exception:
+            log.warning(
+                "could not read the collection's vector size; skipping the check",
+                extra={"collection": self._collection},
+            )
+            return None
 
     async def upsert(self, chunks: list[Chunk], vectors: list[list[float]], namespace: str) -> int:
         from qdrant_client.models import PointStruct
