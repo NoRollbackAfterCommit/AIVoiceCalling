@@ -36,6 +36,18 @@ async def client(services, settings, tmp_path):
     await repository.close()
 
 
+async def _agent(client, key: str, organisation_id: int | None = None) -> None:
+    """Create the agent a number is about to be mapped to.
+
+    A number may only point at an agent that exists and belongs to the same
+    organisation, so these tests have to stand one up first — which is the order
+    the operator's manual gives, and the order the portal walks.
+    """
+    query = f"?organisation_id={organisation_id}" if organisation_id is not None else ""
+    r = await client.put(f"/api/agents/{key}{query}", json={"key": key})
+    assert r.status_code == 200, r.text
+
+
 async def test_an_operator_can_stand_up_a_second_call_centre(client):
     """The worked example, done entirely through the API."""
     health = (
@@ -44,6 +56,10 @@ async def test_an_operator_can_stand_up_a_second_call_centre(client):
         )
     ).json()
     wb = (await client.post("/api/organisations", json={"slug": "wb", "name": "WB Portal"})).json()
+
+    for key in ("health-admissions", "health-exams"):
+        await _agent(client, key, health["id"])
+    await _agent(client, "wb-general", wb["id"])
 
     for number, agent in [
         ("+918065605871", "health-admissions"),
@@ -76,6 +92,7 @@ async def test_a_number_is_stored_canonically_however_it_was_typed(client):
     """An operator pastes whatever their carrier portal shows them, and the
     carrier sends something different again. Both must be the same row."""
     org = (await client.post("/api/organisations", json={"slug": "o", "name": "O"})).json()
+    await _agent(client, "a", org["id"])
     r = await client.put(
         "/api/dids/08065605873", json={"organisation_id": org["id"], "agent_key": "a"}
     )
@@ -85,6 +102,7 @@ async def test_a_number_is_stored_canonically_however_it_was_typed(client):
 
 async def test_an_unusable_number_is_refused_with_a_reason(client):
     org = (await client.post("/api/organisations", json={"slug": "o", "name": "O"})).json()
+    await _agent(client, "a", org["id"])
     r = await client.put(
         "/api/dids/not-a-number", json={"organisation_id": org["id"], "agent_key": "a"}
     )
@@ -107,7 +125,7 @@ async def test_a_duplicate_slug_is_refused_not_silently_merged(client):
 async def test_an_organisation_can_be_suspended_and_restored(client):
     org = (await client.post("/api/organisations", json={"slug": "o", "name": "O"})).json()
     await client.put(
-        "/api/dids/+918065605873", json={"organisation_id": org["id"], "agent_key": "a"}
+        "/api/dids/+918065605873", json={"organisation_id": org["id"], "agent_key": "default"}
     )
 
     async def active_flag() -> bool:
@@ -125,7 +143,7 @@ async def test_releasing_a_number_leaves_the_calls_it_took(client):
     """Deleting the mapping must not be how call history is destroyed."""
     org = (await client.post("/api/organisations", json={"slug": "o", "name": "O"})).json()
     await client.put(
-        "/api/dids/+918065605873", json={"organisation_id": org["id"], "agent_key": "a"}
+        "/api/dids/+918065605873", json={"organisation_id": org["id"], "agent_key": "default"}
     )
     assert (await client.delete("/api/dids/+918065605873")).status_code == 200
     assert (await client.get(f"/api/dids?organisation_id={org['id']}")).json() == []
@@ -136,8 +154,79 @@ async def test_the_did_list_says_which_organisation_each_number_belongs_to(clien
     name its owner without a second request per row."""
     a = (await client.post("/api/organisations", json={"slug": "a", "name": "Alpha"})).json()
     b = (await client.post("/api/organisations", json={"slug": "b", "name": "Beta"})).json()
+    await _agent(client, "x", a["id"])
+    await _agent(client, "y", b["id"])
     await client.put("/api/dids/+918065605871", json={"organisation_id": a["id"], "agent_key": "x"})
     await client.put("/api/dids/+918065605872", json={"organisation_id": b["id"], "agent_key": "y"})
 
     rows = (await client.get("/api/dids")).json()
     assert {r["organisation_name"] for r in rows} == {"Alpha", "Beta"}
+
+
+# -- a number and the agent it reaches must agree ----------------------------
+
+
+async def test_a_number_cannot_point_at_another_organisations_agent(client, services):
+    """Found in production. A number was mapped to one organisation while the
+    agent answering it belonged to another, and nothing said so.
+
+    It breaks the shared training set in the worst way — silently. Uploads at
+    organisation scope go to the agent owner's set, because that is what the
+    Knowledge page can see; a call reads the set of the organisation the number
+    belongs to. With the two different, a document is filed where no caller on
+    that number will ever reach it, and the bot simply keeps answering as before.
+    """
+    alpha = (await client.post("/api/organisations", json={"slug": "a", "name": "A"})).json()
+    beta = (await client.post("/api/organisations", json={"slug": "b", "name": "B"})).json()
+    await client.put(
+        f"/api/agents/alpha-line?organisation_id={alpha['id']}", json={"key": "alpha-line"}
+    )
+
+    refused = await client.put(
+        "/api/dids/+918065605871",
+        json={"organisation_id": beta["id"], "agent_key": "alpha-line"},
+    )
+
+    assert refused.status_code == 400, refused.text
+    detail = refused.json()["detail"]
+    assert "alpha-line" in detail and "A" in detail and "B" in detail, detail
+
+
+async def test_a_number_may_point_at_its_own_organisations_agent(client, services):
+    org = (await client.post("/api/organisations", json={"slug": "a", "name": "A"})).json()
+    await client.put(f"/api/agents/a-line?organisation_id={org['id']}", json={"key": "a-line"})
+
+    mapped = await client.put(
+        "/api/dids/+918065605871", json={"organisation_id": org["id"], "agent_key": "a-line"}
+    )
+
+    assert mapped.status_code == 200, mapped.text
+    assert mapped.json()["agent_key"] == "a-line"
+
+
+async def test_a_number_may_point_at_an_agent_that_belongs_to_nobody(client, services):
+    """The shared fallback. It reads only its own documents, and an upload at
+    organisation scope against it is already refused, so there is no set for a
+    mismatch to hide in."""
+    org = (await client.post("/api/organisations", json={"slug": "a", "name": "A"})).json()
+
+    mapped = await client.put(
+        "/api/dids/+918065605871", json={"organisation_id": org["id"], "agent_key": "default"}
+    )
+
+    assert mapped.status_code == 200, mapped.text
+
+
+async def test_a_number_cannot_point_at_an_agent_that_does_not_exist(client, services):
+    """A typo in the key falls through to the default agent at call time, so the
+    number answers — in the wrong voice, with the wrong documents, and with
+    nothing anywhere to say the mapping never took."""
+    org = (await client.post("/api/organisations", json={"slug": "a", "name": "A"})).json()
+
+    refused = await client.put(
+        "/api/dids/+918065605871",
+        json={"organisation_id": org["id"], "agent_key": "no-such-agent"},
+    )
+
+    assert refused.status_code == 404, refused.text
+    assert "no-such-agent" in refused.json()["detail"]

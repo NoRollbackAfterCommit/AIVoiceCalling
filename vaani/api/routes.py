@@ -309,9 +309,34 @@ async def list_dids(
 @router.put("/dids/{number}", tags=["tenancy"])
 async def upsert_did(number: str, body: DidIn, request: Request) -> dict[str, Any]:
     store = _tenancy(request)
-    if await store.organisation(body.organisation_id) is None:
+    organisation = await store.organisation(body.organisation_id)
+    if organisation is None:
         # Otherwise the number resolves to an organisation nobody can administer.
         raise HTTPException(404, f"No organisation {body.organisation_id}")
+
+    profile = request.app.state.services.profiles.get(body.agent_key)
+    if profile is None:
+        # An unknown key falls through to the default agent at call time, so the
+        # number answers — in the wrong voice, from the wrong documents, with
+        # nothing anywhere to say the mapping never took.
+        raise HTTPException(404, f"No agent {body.agent_key!r}")
+
+    owner = getattr(profile, "organisation_id", None)
+    if owner is not None and owner != body.organisation_id:
+        # Found in production, where it had gone unnoticed. The number belonged
+        # to one organisation and the agent answering it to another, which
+        # breaks the shared training set silently: an upload at organisation
+        # scope goes to the agent owner's set, while a call reads the set of the
+        # organisation the number belongs to. The document lands where no caller
+        # on that number can reach it and the bot answers exactly as before.
+        theirs = await store.organisation(owner)
+        raise HTTPException(
+            400,
+            f"Agent {body.agent_key!r} belongs to "
+            f"{theirs.name if theirs else f'organisation {owner}'}, but this number "
+            f"belongs to {organisation.name}. A number must be answered by its own "
+            "organisation's agent, or they cannot share a training set.",
+        )
     try:
         did = await store.upsert_did(
             number=number,
