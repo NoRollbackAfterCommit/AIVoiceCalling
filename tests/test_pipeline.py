@@ -633,6 +633,73 @@ async def _caller_hears_an_apology(services, transport, session) -> None:
         await asyncio.wait_for(task, timeout=5)
 
 
+class _ToolThenFailLLM(_FailingLLM):
+    """Asks for one tool, then refuses the follow-up request that would have
+    produced the spoken reply — a 429 landing mid-turn."""
+
+    def __init__(self, name: str, arguments: dict[str, Any]) -> None:
+        self._call = (name, arguments)
+        self._calls = 0
+
+    async def complete(self, messages, *, tools=None, temperature=None, max_tokens=None):
+        from vaani.providers.base import Completion, ToolCall
+
+        self._calls += 1
+        if self._calls == 1:
+            name, arguments = self._call
+            return Completion(text="", tool_calls=[ToolCall("c1", name, arguments)])
+        raise RuntimeError("429 Too Many Requests")
+
+
+async def _call_with(services, llm, transport) -> tuple[CallSession, asyncio.Task]:
+    services.llm = llm
+    session = _brisk_call(services, transport)
+    task = asyncio.create_task(session.run())
+    assert await settle(lambda: session.state == CallState.LISTENING), "greeting never ended"
+    await session.push_audio(tone(700))
+    await session.push_audio(silence(400))
+    return session, task
+
+
+async def test_a_transfer_the_model_asked_for_survives_its_next_request_failing(services):
+    """The model called transfer_to_human, then the request for its spoken
+    reply hit a 429. The caller asked for a person and must get one, not be
+    asked to repeat themselves."""
+    from vaani.pipeline.session import TRANSFER_LINES
+
+    transport = FakeTransport()
+    llm = _ToolThenFailLLM("transfer_to_human", {"reason": "asked for a person"})
+    _session, task = await _call_with(services, llm, transport)
+    record = await asyncio.wait_for(task, timeout=10)
+
+    assert transport.of_type("transfer"), "the transfer the model requested was dropped"
+    assert record.outcome == "transferred"
+    spoken = [e["text"] for e in transport.of_type("speech")]
+    assert TRANSFER_LINES["en-IN"] in spoken
+    assert not any(e.get("kind") == "apology" for e in transport.of_type("speech"))
+    assert any(t["name"] == "transfer_to_human" for t in record.tool_calls)
+
+
+async def test_a_hangup_the_model_asked_for_survives_its_next_request_failing(services):
+    from vaani.pipeline.session import GOODBYES
+
+    transport = FakeTransport()
+    llm = _ToolThenFailLLM("end_call", {"summary": "answered the fee question"})
+    services.llm = llm
+    session = _brisk_call(services, transport)
+    # end_call refuses without a recorded outcome; this call already has one.
+    session._tool_ctx.state["disposition"] = "resolved"
+    task = asyncio.create_task(session.run())
+    assert await settle(lambda: session.state == CallState.LISTENING), "greeting never ended"
+    await session.push_audio(tone(700))
+    await session.push_audio(silence(400))
+    record = await asyncio.wait_for(task, timeout=10)
+
+    assert record.outcome == "completed"
+    assert record.disposition == "resolved"
+    assert GOODBYES["en-IN"] in [e["text"] for e in transport.of_type("speech")]
+
+
 async def test_a_turn_the_speech_service_refused_is_apologised_for(services):
     transport = FakeTransport()
     session = _brisk_call(services, transport)

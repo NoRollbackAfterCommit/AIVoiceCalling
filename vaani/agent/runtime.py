@@ -52,6 +52,7 @@ class ConversationAgent:
         self._history: list[Message] = []
         self._schemas = tools.schemas(profile.tools)
         self._nudge: str = ""
+        self._unfinished: AgentTurn | None = None
 
     def set_language(self, language: str) -> None:
         """Rebuild the system prompt around the caller's chosen language.
@@ -115,6 +116,19 @@ class ConversationAgent:
         """
         self._nudge = instruction
 
+    @property
+    def unfinished(self) -> AgentTurn | None:
+        """What the turn in progress had done when it stopped, or None once it
+        has returned normally.
+
+        A turn can fail after a tool already ran — the model asks to transfer,
+        then the request for its spoken reply is refused, or the turn runs out
+        of time. The tools' effects and the actions they asked for are real by
+        then; the session reads them here rather than asking the caller to
+        repeat a request that was already acted on.
+        """
+        return self._unfinished
+
     async def respond(self, user_text: str) -> AgentTurn:
         started = time.monotonic()
         self.note_user(user_text)
@@ -125,6 +139,9 @@ class ConversationAgent:
         # One shot: taken for this turn and cleared, so a stall nudge does not
         # keep steering every reply for the rest of the call.
         nudge, self._nudge = self._nudge, ""
+        # Shares `control` and `invoked`, so it stays current as tools run, and
+        # survives a cancellation (the turn's time budget) as well as an error.
+        self._unfinished = AgentTurn(text="", control=control, tool_calls=invoked)
 
         for iteration in range(self._profile.max_tool_iterations):
             completion = await self._llm.complete(
@@ -137,6 +154,7 @@ class ConversationAgent:
             if not completion.tool_calls:
                 text = _clean_for_speech(completion.text)
                 self._history.append(Message(role="assistant", content=text))
+                self._unfinished = None
                 return AgentTurn(
                     text=text,
                     control=control,
@@ -196,6 +214,7 @@ class ConversationAgent:
             "Let me connect you to a colleague who can help."
         )
         self.note_assistant(fallback)
+        self._unfinished = None
         control.setdefault("action", "transfer")
         control.setdefault("reason", "tool_iteration_limit")
         return AgentTurn(

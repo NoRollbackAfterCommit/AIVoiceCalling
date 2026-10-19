@@ -505,7 +505,7 @@ class CallSession:
             # A model that refuses (429, quota, outage) must not end the turn in
             # silence: this task has no one awaiting it, so an escaped exception
             # dies unnoticed and the caller holds a dead line until they hang up.
-            await self._apologise(exc)
+            await self._apologise(exc, partial=self._agent.unfinished)
             return
         metrics.agent_ms = int((time.monotonic() - t0) * 1000)
 
@@ -574,21 +574,47 @@ class CallSession:
             await self._transfer(turn.control)
             return
         if action == "hangup":
-            self.record.disposition = turn.control.get("disposition")
-            self.record.reference = turn.control.get("reference")
-            self.record.disposition_reason = self._tool_ctx.state.get("disposition_reason")
-            await self.hangup("completed")
+            await self._end_as_requested(turn.control)
             return
 
         if self.state != CallState.ENDED:
             self._set_state(CallState.LISTENING)
 
-    async def _apologise(self, exc: Exception) -> None:
-        """Tell the caller this turn failed, and go back to listening."""
+    async def _end_as_requested(self, control: dict[str, Any]) -> None:
+        self.record.disposition = control.get("disposition")
+        self.record.reference = control.get("reference")
+        self.record.disposition_reason = self._tool_ctx.state.get("disposition_reason")
+        await self.hangup("completed")
+
+    async def _apologise(self, exc: Exception, partial: Any = None) -> None:
+        """Recover a turn that failed: finish what it had already decided, or
+        tell the caller and go back to listening.
+
+        `partial` is what the agent had done before failing. A transfer or a
+        hang-up it requested is carried out — the caller asked for a person, or
+        said goodbye, and asking them to repeat that would be wrong twice over.
+        Only the spoken line is lost, so a fixed one stands in for it.
+        """
         log.exception("agent turn failed", extra={"error": type(exc).__name__})
         await self._transport.send_event({"type": "turn_failed", "error": type(exc).__name__})
         await self._stop_hold()
-        text = TURN_FAILED.get(self._language.current, TURN_FAILED["en-IN"])
+        language = self._language.current
+        if partial is not None and partial.tool_calls:
+            # Their effects happened (a complaint registered, a callback booked),
+            # so they belong in the record whatever became of the reply.
+            self.record.tool_calls.extend(partial.tool_calls)
+        action = partial.control.get("action") if partial is not None else None
+        if action in ("transfer", "hangup"):
+            lines = TRANSFER_LINES if action == "transfer" else GOODBYES
+            text = lines.get(language, lines["en-IN"])
+            self._agent.note_assistant(text)
+            await self._speak(text, kind="reply")
+            if action == "transfer":
+                await self._transfer(partial.control)
+            else:
+                await self._end_as_requested(partial.control)
+            return
+        text = TURN_FAILED.get(language, TURN_FAILED["en-IN"])
         # Into the history too, so the model's next reply knows the caller was
         # asked to repeat themselves rather than seeing a question left hanging.
         self._agent.note_assistant(text)
@@ -1049,6 +1075,30 @@ TURN_FAILED: dict[str, str] = {
     "gu-IN": "માફ કરશો, હું અત્યારે સમજી શક્યો નહીં. કૃપા કરીને ફરીથી કહેશો?",
     "pa-IN": "ਮਾਫ਼ ਕਰਨਾ, ਮੈਂ ਹੁਣੇ ਸਮਝ ਨਹੀਂ ਸਕਿਆ। ਕੀ ਤੁਸੀਂ ਕਿਰਪਾ ਕਰਕੇ ਦੁਬਾਰਾ ਕਹਿ ਸਕਦੇ ਹੋ?",
     "od-IN": "କ୍ଷମା କରିବେ, ମୁଁ ବର୍ତ୍ତମାନ ବୁଝିପାରିଲି ନାହିଁ। ଦୟାକରି ପୁଣି କହିବେ କି?",
+}
+
+
+# Said when the model asked to transfer but its own words were lost to a failure.
+TRANSFER_LINES: dict[str, str] = {
+    "en-IN": "Please stay on the line, I am connecting you to a colleague now.",
+    "hi-IN": "कृपया लाइन पर बने रहें, मैं आपको अभी एक सहकर्मी से जोड़ रहा हूँ।",
+    "bn-IN": "অনুগ্রহ করে লাইনে থাকুন, আমি এখনই আপনাকে একজন সহকর্মীর সঙ্গে যুক্ত করছি।",
+    "mr-IN": "कृपया लाइनवर राहा, मी आपल्याला आत्ता एका सहकाऱ्याशी जोडत आहे.",
+    "gu-IN": "કૃપા કરીને લાઇન પર રહો, હું તમને હમણાં એક સહકર્મી સાથે જોડું છું.",
+    "pa-IN": "ਕਿਰਪਾ ਕਰਕੇ ਲਾਈਨ ਉੱਤੇ ਰਹੋ, ਮੈਂ ਤੁਹਾਨੂੰ ਹੁਣੇ ਇੱਕ ਸਹਿਕਰਮੀ ਨਾਲ ਜੋੜ ਰਿਹਾ ਹਾਂ।",
+    "od-IN": "ଦୟାକରି ଲାଇନରେ ରୁହନ୍ତୁ, ମୁଁ ଆପଣଙ୍କୁ ଏବେ ଜଣେ ସହକର୍ମୀଙ୍କ ସହ ଯୋଡୁଛି।",
+}
+
+
+# Said when the model asked to end the call but its closing line was lost.
+GOODBYES: dict[str, str] = {
+    "en-IN": "Thank you for calling. Goodbye.",
+    "hi-IN": "कॉल करने के लिए धन्यवाद। नमस्कार।",
+    "bn-IN": "ফোন করার জন্য ধন্যবাদ। নমস্কার।",
+    "mr-IN": "फोन केल्याबद्दल धन्यवाद. नमस्कार.",
+    "gu-IN": "કૉલ કરવા બદલ આભાર. નમસ્તે.",
+    "pa-IN": "ਕਾਲ ਕਰਨ ਲਈ ਧੰਨਵਾਦ। ਸਤ ਸ੍ਰੀ ਅਕਾਲ।",
+    "od-IN": "କଲ କରିଥିବାରୁ ଧନ୍ୟବାଦ। ନମସ୍କାର।",
 }
 
 
