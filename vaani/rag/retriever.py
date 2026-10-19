@@ -347,6 +347,59 @@ class Retriever:
                 await self._documents.delete(ns, source)
         return removed
 
+    async def catalog(
+        self, *, agent_key: str = "default", organisation_id: int | None = None
+    ) -> list[dict[str, Any]]:
+        """Every document in a partition, saved or indexed, and whether it is
+        searchable yet.
+
+        Read from the database as well as the index, so an operator can still
+        see — and correct — what they uploaded while the index is unreachable.
+        `chunks` is None when the index could not be asked.
+        """
+        ns = self.namespace(agent_key, organisation_id)
+        indexed: dict[str, int] = {}
+        reachable = True
+        try:
+            indexed = dict(await self._store.sources(ns))
+        except Exception:
+            if self._documents is None:
+                raise
+            reachable = False
+        names = set(indexed)
+        if self._documents is not None:
+            names |= set(await self._documents.sources(ns))
+        return [
+            {
+                "source": name,
+                "chunks": indexed.get(name, 0) if reachable else None,
+                "indexed": name in indexed,
+            }
+            for name in sorted(names)
+        ]
+
+    async def document(
+        self, source: str, *, agent_key: str = "default", organisation_id: int | None = None
+    ) -> Any:
+        """One document's full text: the saved copy, or failing that the text
+        reassembled from the index (a document from before copies were kept)."""
+        ns = self.namespace(agent_key, organisation_id)
+        if self._documents is not None:
+            doc = await self._documents.get(ns, source)
+            if doc is not None:
+                return doc
+        chunks = await self._store.export(ns, source)
+        if not chunks:
+            return None
+        from vaani.db.knowledge import KnowledgeDocument
+
+        return KnowledgeDocument(
+            namespace=ns,
+            source=source,
+            text="\n\n".join(c.text for c in chunks),
+            metadata={"recovered_from_index": True},
+        )
+
     async def count(self, agent_key: str | None = None, organisation_id: int | None = None) -> int:
         if agent_key is None and organisation_id is None:
             return await self._store.count(None)

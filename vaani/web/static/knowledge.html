@@ -199,8 +199,32 @@
   </div>
 
   <div class="group">
-    <h2>Indexed sources <span id="total" style="color:var(--dim)"></span></h2>
+    <h2>Training documents <span id="total" style="color:var(--dim)"></span></h2>
     <div id="sources"><div class="empty">Loading…</div></div>
+  </div>
+
+  <div class="group" id="editor" hidden>
+    <h2>Edit <span id="editScope" style="color:var(--dim)"></span></h2>
+    <div class="body">
+      <div class="row">
+        <div class="grow">
+          <label for="editName">Source name</label>
+          <input id="editName" />
+          <div class="help">Change it to rename the document.</div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="grow">
+          <label for="editText">Text</label>
+          <textarea id="editText" style="min-height:320px"></textarea>
+          <div class="help" id="editNote"></div>
+        </div>
+      </div>
+      <div class="row">
+        <button class="primary" id="editSave">Save changes</button>
+        <button id="editCancel">Cancel</button>
+      </div>
+    </div>
   </div>
 
   <div class="group">
@@ -344,15 +368,21 @@ async function loadSources() {
   try {
     const rows = await (await fetch(
       `/api/knowledge/sources?agent_key=${encodeURIComponent(agentKey)}&scope=both`)).json();
+    if (!Array.isArray(rows)) throw new Error(rows.detail || 'unexpected response');
     if (!rows.length) {
-      box.innerHTML = '<div class="empty">Nothing indexed yet. '
+      box.innerHTML = '<div class="empty">Nothing here yet. '
         + 'Upload a document or paste text above.</div>';
       el('total').textContent = '';
       return;
     }
-    const chunks = rows.reduce((n, r) => n + r.chunks, 0);
-    el('total').textContent = `· ${rows.length} source${rows.length > 1 ? 's' : ''}, `
-      + `${chunks} chunk${chunks > 1 ? 's' : ''}`;
+    // chunks is null when the index could not be asked; the documents are
+    // still listed from their saved copies, so they can be read and corrected.
+    const known = rows.filter(r => r.chunks !== null);
+    const chunks = known.reduce((n, r) => n + r.chunks, 0);
+    const pending = rows.filter(r => !r.indexed).length;
+    el('total').textContent = `· ${rows.length} document${rows.length > 1 ? 's' : ''}`
+      + (known.length ? `, ${chunks} chunk${chunks === 1 ? '' : 's'}` : '')
+      + (pending ? ` · ${pending} not searchable yet` : '');
     box.innerHTML = `<table><thead><tr>
         <th>Source</th><th>Used on</th><th>Chunks</th><th></th>
       </tr></thead><tbody>${rows.map(r => `
@@ -361,8 +391,14 @@ async function loadSources() {
           <td>${r.scope === 'organisation'
                 ? '<span class="pill org">whole organisation</span>'
                 : `<span class="pill">${esc(agentKey)} only</span>`}</td>
-          <td class="num">${r.chunks}</td>
+          <td class="num">${r.indexed
+                ? r.chunks
+                : '<span class="pill" style="color:var(--warn)" '
+                  + 'title="Saved, and indexed automatically once the index is reachable">'
+                  + 'not indexed yet</span>'}</td>
           <td class="act">
+            <button class="small" data-edit="${esc(r.source)}"
+                    data-scope="${esc(r.scope)}">Edit</button>
             <button class="small danger" data-del="${esc(r.source)}"
                     data-scope="${esc(r.scope)}">Delete</button>
           </td>
@@ -371,6 +407,78 @@ async function loadSources() {
     box.innerHTML = `<div class="empty">Could not load sources: ${esc(e.message)}</div>`;
   }
 }
+
+// -- edit ------------------------------------------------------------------
+
+let editing = null;   // { source, scope } of the document open in the editor
+
+el('sources').addEventListener('click', async ev => {
+  const source = ev.target.dataset && ev.target.dataset.edit;
+  if (!source) return;
+  const docScope = ev.target.dataset.scope || 'agent';
+  try {
+    const res = await fetch(`/api/knowledge/document?source=${encodeURIComponent(source)}`
+      + `&agent_key=${encodeURIComponent(agentKey)}&scope=${encodeURIComponent(docScope)}`);
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(out.detail || res.statusText);
+    editing = { source, scope: docScope };
+    el('editName').value = out.source;
+    el('editText').value = out.text;
+    el('editScope').textContent = docScope === 'organisation'
+      ? '· shared by the whole organisation' : `· ${agentKey} only`;
+    el('editNote').textContent = out.recovered_from_index
+      ? 'Recovered from the search index, so passages may repeat a line where they '
+        + 'overlapped. Tidy it and save to keep a clean copy.'
+      : '';
+    el('editor').hidden = false;
+    el('editor').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (e) {
+    toast('Could not open: ' + e.message, 'bad');
+  }
+});
+
+el('editCancel').addEventListener('click', () => {
+  editing = null;
+  el('editor').hidden = true;
+});
+
+el('editSave').addEventListener('click', async () => {
+  if (!editing) return;
+  const name = el('editName').value.trim();
+  const text = el('editText').value;
+  if (!name || !text.trim()) { toast('A name and some text are both required.', 'bad'); return; }
+  const btn = el('editSave');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/knowledge/document', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source: editing.source,
+        new_source: name !== editing.source ? name : null,
+        text, agent_key: agentKey, scope: editing.scope,
+      }),
+    });
+    const out = await res.json().catch(() => ({}));
+    if (res.status === 503 && name === editing.source) {
+      // Saved; only the index is behind. Say so rather than calling it a failure.
+      toast(out.detail || 'Saved; it will be searchable once the index is back.', 'ok');
+    } else if (!res.ok) {
+      throw new Error(out.detail || res.statusText);
+    } else {
+      toast(out.renamed_from
+        ? `Saved as "${out.source}" (was "${out.renamed_from}")`
+        : `Saved "${out.source}" — ${out.indexed_chunks} chunks indexed`, 'ok');
+    }
+    editing = null;
+    el('editor').hidden = true;
+    await loadSources();
+  } catch (e) {
+    toast('Save failed: ' + e.message, 'bad');
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 el('sources').addEventListener('click', async ev => {
   const source = ev.target.dataset && ev.target.dataset.del;
@@ -524,6 +632,10 @@ el('q').addEventListener('keydown', e => { if (e.key === 'Enter') runSearch(); }
 el('agent').addEventListener('change', async () => {
   agentKey = el('agent').value;
   el('hits').innerHTML = '';
+  // An open editor belongs to the line it was opened from; saving it under
+  // the newly chosen one would write the text into the wrong set.
+  editing = null;
+  el('editor').hidden = true;
   await loadScope();
   await loadSources();
 });

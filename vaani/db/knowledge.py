@@ -115,6 +115,19 @@ class KnowledgeRepository:
             metadata=json.loads(row.metadata_json or "{}"),
         )
 
+    async def sources(self, namespace: str) -> list[str]:
+        """Names of the live documents in one partition — names only."""
+        async with self._sessions() as session:
+            rows = (
+                await session.execute(
+                    select(KnowledgeDocumentRow.source).where(
+                        KnowledgeDocumentRow.namespace == namespace,
+                        KnowledgeDocumentRow.deleted.is_(False),
+                    )
+                )
+            ).all()
+        return sorted(r[0] for r in rows)
+
     async def versions(self) -> dict[tuple[str, str], str | None]:
         """Every known (namespace, source) → its version, None if deleted.
 

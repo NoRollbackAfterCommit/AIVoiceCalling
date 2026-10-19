@@ -558,17 +558,85 @@ async def knowledge_sources(
     try:
         if scope in ("agent", "both"):
             rows += [
-                {"source": source, "chunks": chunks, "scope": "agent"}
-                for source, chunks in await retriever.sources(agent_key=agent_key)
+                {**row, "scope": "agent"} for row in await retriever.catalog(agent_key=agent_key)
             ]
         if scope in ("organisation", "both") and owner is not None:
             rows += [
-                {"source": source, "chunks": chunks, "scope": "organisation"}
-                for source, chunks in await retriever.sources(organisation_id=owner)
+                {**row, "scope": "organisation"}
+                for row in await retriever.catalog(organisation_id=owner)
             ]
     except Exception as exc:
         raise _index_unreachable(retriever, exc, saved=False) from exc
     return rows
+
+
+@router.get("/knowledge/document", tags=["knowledge"])
+async def read_document(
+    request: Request,
+    source: str = Query(min_length=1),
+    agent_key: str = "default",
+    scope: Literal["agent", "organisation"] = "agent",
+) -> dict[str, Any]:
+    """The full text of one training document, for the editor."""
+    organisation_id = _scope_of(request, agent_key, scope)
+    retriever = request.app.state.services.retriever
+    try:
+        doc = await retriever.document(source, agent_key=agent_key, organisation_id=organisation_id)
+    except Exception as exc:
+        raise _index_unreachable(retriever, exc, saved=False) from exc
+    if doc is None:
+        raise HTTPException(404, f"No document named {source!r} in this set")
+    return {
+        "source": doc.source,
+        "scope": scope,
+        "agent_key": agent_key,
+        "text": doc.text,
+        "recovered_from_index": bool(doc.metadata.get("recovered_from_index")),
+    }
+
+
+class DocumentEdit(BaseModel):
+    source: str = Field(min_length=1, max_length=512)
+    # Set to rename. The old name is removed once the new one is indexed.
+    new_source: str | None = Field(default=None, min_length=1, max_length=512)
+    text: str = Field(min_length=1)
+    agent_key: str = "default"
+    scope: Literal["agent", "organisation"] = "agent"
+
+
+@router.put("/knowledge/document", tags=["knowledge"])
+async def edit_document(body: DocumentEdit, request: Request) -> dict[str, Any]:
+    """Replace a document's text, and optionally its name.
+
+    Uploading under the same name already replaces; this is that, for text an
+    operator corrects in place rather than re-exporting a file.
+    """
+    organisation_id = _scope_of(request, body.agent_key, body.scope)
+    retriever = request.app.state.services.retriever
+    target = (body.new_source or body.source).strip()
+    renaming = target != body.source
+    if renaming and not retriever.ready:
+        # A rename is a write and a delete. With the index down the delete
+        # cannot happen, and the document would answer under both names.
+        raise HTTPException(
+            503, "Renaming needs the knowledge index, which cannot be reached right now."
+        )
+    try:
+        count = await retriever.index_text(
+            body.text, source=target, agent_key=body.agent_key, organisation_id=organisation_id
+        )
+        if renaming:
+            await retriever.delete_source(
+                body.source, agent_key=body.agent_key, organisation_id=organisation_id
+            )
+    except Exception as exc:
+        raise _index_unreachable(retriever, exc, saved=not renaming) from exc
+    return {
+        "indexed_chunks": count,
+        "source": target,
+        "renamed_from": body.source if renaming else None,
+        "scope": body.scope,
+    }
 
 
 @router.get("/knowledge/stats", tags=["knowledge"])
