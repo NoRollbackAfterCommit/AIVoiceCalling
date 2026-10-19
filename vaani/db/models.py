@@ -8,7 +8,7 @@ and the behaviour they ran under.
 
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -133,3 +133,32 @@ class UserRow(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[float] = mapped_column(Float)
     last_login_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class KnowledgeDocumentRow(Base):
+    """The text of one uploaded training document — the system of record.
+
+    The vector index is derived from these rows and can always be rebuilt
+    from them. Until this table existed the index was the only copy, so when
+    the hosted Qdrant cluster went away every document went with it.
+    """
+
+    __tablename__ = "knowledge_documents"
+    __table_args__ = (
+        UniqueConstraint("namespace", "source", name="uq_knowledge_namespace_source"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # An agent key, or `org:<id>` for an organisation's shared set — the same
+    # partition the retriever indexes it under.
+    namespace: Mapped[str] = mapped_column(String(80), index=True)
+    source: Mapped[str] = mapped_column(String(512))
+    text: Mapped[str] = mapped_column(Text)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    # Version stamp of `text`, kept as a column so reconciliation can compare
+    # versions without reading every document's text.
+    doc_hash: Mapped[str] = mapped_column(String(32), default="")
+    # A tombstone: the name is kept so a stale copy in some index is not
+    # adopted back as a new document.
+    deleted: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[float] = mapped_column(Float)

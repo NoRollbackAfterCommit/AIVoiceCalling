@@ -8,7 +8,9 @@ stays air-gapped.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import random
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -19,6 +21,17 @@ from vaani.core.logging import get_logger
 from vaani.providers.base import Completion, Message, ToolCall
 
 log = get_logger(__name__)
+
+# One attempt plus two retries, for the refusals that pass: a rate limit and a
+# server-side hiccup. Bounded because the caller is listening to the hold tone
+# the whole time. Production, 30 Sep: one unretried 429 on the first question
+# after the language choice left a caller in silence until they hung up.
+_MAX_ATTEMPTS = 3
+_RETRYABLE = {429, 500, 502, 503, 504}
+_MAX_RETRY_AFTER_S = 2.0
+# A 429 carrying one of these is billing, not load. It fails identically every
+# time, so retrying it only lengthens the silence.
+_PERMANENT_CODES = {"insufficient_quota", "billing_hard_limit_reached"}
 
 
 class OpenAICompatLLM:
@@ -32,7 +45,9 @@ class OpenAICompatLLM:
         temperature: float = 0.3,
         max_tokens: int = 512,
         timeout_s: float = 30.0,
+        retry_backoff_s: float = 0.25,
     ) -> None:
+        self._retry_backoff = retry_backoff_s
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._api_key = api_key
@@ -74,8 +89,7 @@ class OpenAICompatLLM:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
 
-        resp = await self._client.post("/chat/completions", json=payload)
-        resp.raise_for_status()
+        resp = await self._post(payload)
         data = resp.json()
         choice = data["choices"][0]
         msg = choice.get("message", {})
@@ -99,6 +113,36 @@ class OpenAICompatLLM:
             prompt_tokens=usage.get("prompt_tokens", 0),
             completion_tokens=usage.get("completion_tokens", 0),
         )
+
+    async def _post(self, payload: dict[str, Any]) -> httpx.Response:
+        assert self._client is not None
+        for attempt in range(_MAX_ATTEMPTS):
+            resp = await self._client.post("/chat/completions", json=payload)
+            if resp.status_code < 400:
+                return resp
+            code = _error_code(resp)
+            last = attempt == _MAX_ATTEMPTS - 1
+            asked = _retry_after(resp)
+            # A vendor asking for longer than a caller can wait is a refusal;
+            # retrying sooner than it asked only gets refused again.
+            too_long = asked is not None and asked > _MAX_RETRY_AFTER_S
+            retryable = resp.status_code in _RETRYABLE and code not in _PERMANENT_CODES
+            if retryable and not too_long and not last:
+                # Jittered, or every call caught in one burst retries at the
+                # same instant and meets the same limit again.
+                wait = asked if asked is not None else self._retry_backoff * (2**attempt)
+                wait *= random.uniform(1.0, 1.5)
+                log.warning(
+                    "llm refused; retrying",
+                    extra={"status": resp.status_code, "code": code, "attempt": attempt + 1},
+                )
+                await asyncio.sleep(wait)
+                continue
+            # Said once, with the vendor's own reason: "429" alone cannot tell a
+            # traffic burst from an account that has run out of credit.
+            log.error("llm request failed", extra={"status": resp.status_code, "code": code})
+            resp.raise_for_status()
+        raise AssertionError("unreachable")  # pragma: no cover
 
     async def stream(
         self,
@@ -147,3 +191,24 @@ def _parse_arguments(raw: Any) -> dict[str, Any]:
     except json.JSONDecodeError:
         log.warning("unparseable tool arguments", extra={"raw": str(raw)[:200]})
         return {}
+
+
+def _error_code(resp: httpx.Response) -> str | None:
+    """The machine-readable reason in an OpenAI-shaped error body, if any."""
+    try:
+        error = resp.json().get("error") or {}
+    except ValueError:
+        return None
+    if not isinstance(error, dict):
+        return None
+    return error.get("code") or error.get("type")
+
+
+def _retry_after(resp: httpx.Response) -> float | None:
+    """Seconds the vendor asked us to wait, in the delta-seconds form only."""
+    raw = resp.headers.get("retry-after")
+    try:
+        seconds = float(raw) if raw else None
+    except ValueError:
+        return None
+    return seconds if seconds is not None and seconds >= 0 else None

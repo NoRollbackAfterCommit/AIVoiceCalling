@@ -404,17 +404,38 @@ def _scope_of(request: Request, agent_key: str, scope: str) -> int | None:
     return owner
 
 
+def _index_unreachable(retriever: Any, exc: Exception, *, saved: bool) -> HTTPException:
+    """A 503 that says what happened to the operator's document.
+
+    Before this, a store that had gone away surfaced as a bare 500 on every
+    knowledge request, and the page read as "your training has vanished" when
+    it was the index that was unreachable.
+    """
+    log.warning("knowledge index unreachable", extra={"error": type(exc).__name__})
+    if saved and retriever.documents is not None:
+        detail = (
+            "The document is saved, but the knowledge index cannot be reached right now. "
+            "It will become searchable automatically once the index is back."
+        )
+    else:
+        detail = "The knowledge index cannot be reached right now. Try again shortly."
+    return HTTPException(503, detail)
+
+
 @router.post("/knowledge/text", tags=["knowledge"])
 async def ingest_text(body: TextIngest, request: Request) -> dict[str, Any]:
     organisation_id = _scope_of(request, body.agent_key, body.scope)
     retriever = request.app.state.services.retriever
-    count = await retriever.index_text(
-        body.text,
-        source=body.source,
-        agent_key=body.agent_key,
-        organisation_id=organisation_id,
-        metadata=body.metadata,
-    )
+    try:
+        count = await retriever.index_text(
+            body.text,
+            source=body.source,
+            agent_key=body.agent_key,
+            organisation_id=organisation_id,
+            metadata=body.metadata,
+        )
+    except Exception as exc:
+        raise _index_unreachable(retriever, exc, saved=True) from exc
     return {
         "indexed_chunks": count,
         "source": body.source,
@@ -442,16 +463,25 @@ async def ingest_file(
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp.write(raw)
         tmp_path = Path(tmp.name)
+    retriever = request.app.state.services.retriever
     try:
-        from vaani.rag.chunking import chunk_text, load_file
+        from vaani.rag.chunking import load_file
 
-        text = load_file(tmp_path)
-        chunks = chunk_text(text, source=file.filename or tmp_path.name)
-        count = await request.app.state.services.retriever.index_chunks(
-            chunks, agent_key=agent_key, organisation_id=organisation_id
-        )
-    except ValueError as exc:
-        raise HTTPException(415, str(exc)) from exc
+        try:
+            text = load_file(tmp_path)
+        except ValueError as exc:
+            raise HTTPException(415, str(exc)) from exc
+        try:
+            # index_text, not index_chunks: it keeps the document's text in the
+            # database as well, which is what lets a lost index be rebuilt.
+            count = await retriever.index_text(
+                text,
+                source=file.filename or tmp_path.name,
+                agent_key=agent_key,
+                organisation_id=organisation_id,
+            )
+        except Exception as exc:
+            raise _index_unreachable(retriever, exc, saved=True) from exc
     finally:
         tmp_path.unlink(missing_ok=True)
 
@@ -498,9 +528,13 @@ async def delete_source(
     scope: Literal["agent", "organisation"] = "agent",
 ) -> dict[str, Any]:
     organisation_id = _scope_of(request, agent_key, scope)
-    removed = await request.app.state.services.retriever.delete_source(
-        source, agent_key=agent_key, organisation_id=organisation_id
-    )
+    retriever = request.app.state.services.retriever
+    try:
+        removed = await retriever.delete_source(
+            source, agent_key=agent_key, organisation_id=organisation_id
+        )
+    except Exception as exc:
+        raise _index_unreachable(retriever, exc, saved=False) from exc
     return {"source": source, "removed_chunks": removed, "scope": scope}
 
 
@@ -521,16 +555,19 @@ async def knowledge_sources(
     retriever = request.app.state.services.retriever
 
     rows: list[dict[str, Any]] = []
-    if scope in ("agent", "both"):
-        rows += [
-            {"source": source, "chunks": chunks, "scope": "agent"}
-            for source, chunks in await retriever.sources(agent_key=agent_key)
-        ]
-    if scope in ("organisation", "both") and owner is not None:
-        rows += [
-            {"source": source, "chunks": chunks, "scope": "organisation"}
-            for source, chunks in await retriever.sources(organisation_id=owner)
-        ]
+    try:
+        if scope in ("agent", "both"):
+            rows += [
+                {"source": source, "chunks": chunks, "scope": "agent"}
+                for source, chunks in await retriever.sources(agent_key=agent_key)
+            ]
+        if scope in ("organisation", "both") and owner is not None:
+            rows += [
+                {"source": source, "chunks": chunks, "scope": "organisation"}
+                for source, chunks in await retriever.sources(organisation_id=owner)
+            ]
+    except Exception as exc:
+        raise _index_unreachable(retriever, exc, saved=False) from exc
     return rows
 
 

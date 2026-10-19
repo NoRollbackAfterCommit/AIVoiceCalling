@@ -559,6 +559,98 @@ async def test_a_reply_that_produced_no_audio_is_announced_not_just_logged(servi
     await asyncio.wait_for(task, timeout=5)
 
 
+class _FailingLLM:
+    """A model that refuses every request, as OpenAI does under a 429."""
+
+    name = "failing"
+
+    async def start(self) -> None: ...
+
+    async def complete(self, messages, *, tools=None, temperature=None, max_tokens=None):
+        raise RuntimeError("429 Too Many Requests")
+
+    async def close(self) -> None: ...
+
+
+async def test_a_turn_the_model_could_not_answer_is_apologised_for_not_left_silent(services):
+    """Production, 30 Sep: the caller chose Bengali, asked a question, OpenAI
+    answered 429, and the turn task died with nothing said. The caller sat in
+    silence for fifty seconds and hung up. A failed turn must still be heard,
+    and the call must go back to listening so the caller can try again."""
+    from vaani.pipeline.session import TURN_FAILED
+
+    transport = FakeTransport()
+    services.llm = _FailingLLM()
+    session = _brisk_call(services, transport)
+    task = asyncio.create_task(session.run())
+    try:
+        assert await settle(lambda: session.state == CallState.LISTENING), "greeting never ended"
+        await session.push_audio(tone(700))
+        await session.push_audio(silence(400))
+
+        def apologised() -> bool:
+            return any(e.get("kind") == "apology" for e in transport.of_type("speech"))
+
+        assert await settle(apologised), "a failed turn reached the caller as silence"
+        spoken = next(e for e in transport.of_type("speech") if e.get("kind") == "apology")
+        assert spoken["text"] == TURN_FAILED["en-IN"]
+        assert transport.of_type("turn_failed"), "a supervisor must be able to see it"
+        assert await settle(lambda: session.state == CallState.LISTENING), (
+            "the call must keep listening after a failed turn"
+        )
+    finally:
+        await session.hangup()
+        await asyncio.wait_for(task, timeout=5)
+
+
+class _FailingSTT:
+    name = "failing"
+
+    async def start(self) -> None: ...
+
+    async def transcribe(self, audio, *, language=None):
+        raise RuntimeError("429 Too Many Requests")
+
+    async def close(self) -> None: ...
+
+
+class _HangingLLM(_FailingLLM):
+    async def complete(self, messages, *, tools=None, temperature=None, max_tokens=None):
+        await asyncio.sleep(3600)
+
+
+async def _caller_hears_an_apology(services, transport, session) -> None:
+    task = asyncio.create_task(session.run())
+    try:
+        assert await settle(lambda: session.state == CallState.LISTENING), "greeting never ended"
+        await session.push_audio(tone(700))
+        await session.push_audio(silence(400))
+        assert await settle(
+            lambda: any(e.get("kind") == "apology" for e in transport.of_type("speech"))
+        ), "a failed turn reached the caller as silence"
+    finally:
+        await session.hangup()
+        await asyncio.wait_for(task, timeout=5)
+
+
+async def test_a_turn_the_speech_service_refused_is_apologised_for(services):
+    transport = FakeTransport()
+    session = _brisk_call(services, transport)
+    services.stt = _FailingSTT()
+    await _caller_hears_an_apology(services, transport, session)
+
+
+async def test_a_turn_that_runs_past_its_budget_is_apologised_for(services, monkeypatch):
+    """Retries and tool loops multiply; the caller's wait must not."""
+    import vaani.pipeline.session as session_module
+
+    monkeypatch.setattr(session_module, "_TURN_BUDGET_S", 0.2)
+    transport = FakeTransport()
+    services.llm = _HangingLLM()
+    session = _brisk_call(services, transport)
+    await _caller_hears_an_apology(services, transport, session)
+
+
 async def test_a_reply_that_was_heard_is_not_announced_as_silent(services):
     """The signal is worthless if every normal turn trips it."""
     transport = FakeTransport()

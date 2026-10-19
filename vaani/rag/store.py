@@ -32,6 +32,19 @@ class SearchHit:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+class DimensionMismatch(RuntimeError):
+    """The index holds vectors of another width than the embedder produces.
+
+    Its own type so the retriever can tell "rebuild me from the documents" apart
+    from "the store is unreachable", which must never trigger a rebuild.
+    """
+
+    def __init__(self, message: str, *, found: int, wanted: int) -> None:
+        super().__init__(message)
+        self.found = found
+        self.wanted = wanted
+
+
 class VectorStore(Protocol):
     async def ensure(self, dim: int) -> None: ...
     async def upsert(
@@ -43,6 +56,9 @@ class VectorStore(Protocol):
     async def delete_source(self, source: str, namespace: str) -> int: ...
     async def count(self, namespace: str | None = None) -> int: ...
     async def sources(self, namespace: str) -> list[tuple[str, int]]: ...
+    async def inventory(self) -> dict[tuple[str, str], set[str]]: ...
+    async def export(self, namespace: str, source: str) -> list[Chunk]: ...
+    async def switch_width(self, dim: int) -> None: ...
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +109,21 @@ class MemoryVectorStore:
             counts[chunk.source] = counts.get(chunk.source, 0) + 1
         return sorted(counts.items())
 
+    async def inventory(self) -> dict[tuple[str, str], set[str]]:
+        found: dict[tuple[str, str], set[str]] = {}
+        for ns, bucket in self._data.items():
+            for _, c in bucket:
+                found.setdefault((ns, c.source), set()).add(c.metadata.get("doc_hash", ""))
+        return found
+
+    async def export(self, namespace: str, source: str) -> list[Chunk]:
+        chunks = [c for _, c in self._data.get(namespace, []) if c.source == source]
+        return sorted(chunks, key=lambda c: c.ordinal)
+
+    async def switch_width(self, dim: int) -> None:
+        # Never mismatched: the memory store holds whatever width it is given.
+        return None
+
 
 def _cosine(a: list[float], b: list[float]) -> float:
     dot = na = nb = 0.0
@@ -120,17 +151,19 @@ class QdrantVectorStore:
         self._url = url
         self._api_key = api_key
         self._collection = collection
+        # The configured name. A different embedder width lives beside it as
+        # `<name>_<dim>d`; see ensure().
+        self._base = collection
         self._client: Any = None
 
     async def ensure(self, dim: int) -> None:
         from qdrant_client import AsyncQdrantClient
-        from qdrant_client.models import Distance, VectorParams
 
         if self._client is None:
             self._client = AsyncQdrantClient(url=self._url, api_key=self._api_key)
 
-        existing = await self._client.get_collections()
-        if self._collection in {c.name for c in existing.collections}:
+        existing = {c.name for c in (await self._client.get_collections()).collections}
+        if self._collection in existing:
             # Qdrant fixes the vector width when the collection is made, and
             # changing the embedder changes that width — 384 for the hash
             # embedder, 1536 for OpenAI's small model. This used to return here
@@ -140,14 +173,47 @@ class QdrantVectorStore:
             # says it does not have the information.
             found = await self._dimension()
             if found is not None and found != dim:
-                raise RuntimeError(
+                # A collection for this width already exists from an earlier
+                # switch: use it. Collections are never dropped — on 17 Sep the
+                # advice to delete one was followed twice and wiped every
+                # document — so each width keeps its own, and switching back to
+                # an old embedder finds its old collection again.
+                widened = self._width_name(dim)
+                if widened in existing:
+                    self._collection = widened
+                    return
+                # No advice to delete anything. With the documents kept in the
+                # database the retriever builds the new width itself; without
+                # them, the operator must put the embedder back.
+                raise DimensionMismatch(
                     f"Qdrant collection {self._collection!r} holds {found}-dimension "
                     f"vectors but the configured embedder produces {dim}. They were "
-                    "indexed by a different embedder. Either put the previous one "
-                    f"back, or delete the {self._collection!r} collection and upload "
-                    "the documents again — switching embedders cannot reuse vectors."
+                    "indexed by a different embedder; switching embedders cannot "
+                    "reuse vectors. Put the previous embedder back.",
+                    found=found,
+                    wanted=dim,
                 )
             return
+        await self._create(dim)
+
+    def _width_name(self, dim: int) -> str:
+        return f"{self._base}_{dim}d"
+
+    async def switch_width(self, dim: int) -> None:
+        """Move to (creating if needed) the collection for this width.
+
+        A new collection rather than a dropped-and-recreated one: the retriever
+        still serving live calls reads the old collection until the new one is
+        filled, and a collection this deployment does not own is never touched.
+        """
+        self._collection = self._width_name(dim)
+        existing = {c.name for c in (await self._client.get_collections()).collections}
+        if self._collection not in existing:
+            await self._create(dim)
+
+    async def _create(self, dim: int) -> None:
+        from qdrant_client.models import Distance, VectorParams
+
         await self._client.create_collection(
             collection_name=self._collection,
             vectors_config=VectorParams(size=dim, distance=Distance.COSINE),
@@ -294,3 +360,48 @@ class QdrantVectorStore:
             if offset is None:
                 break
         return sorted(counts.items())
+
+    async def _scroll(self, flt: Any, fields: Any) -> list[Any]:
+        points_all: list[Any] = []
+        offset: Any = None
+        while True:
+            points, offset = await self._client.scroll(
+                collection_name=self._collection,
+                scroll_filter=flt,
+                limit=256,
+                offset=offset,
+                with_payload=fields,
+                with_vectors=False,
+            )
+            points_all.extend(points)
+            if offset is None:
+                return points_all
+
+    async def inventory(self) -> dict[tuple[str, str], set[str]]:
+        """Every (namespace, source) indexed, with the document versions its
+        chunks came from — so a sync can tell a stale copy from a current one."""
+        found: dict[tuple[str, str], set[str]] = {}
+        for p in await self._scroll(None, ["namespace", "source", "doc_hash"]):
+            payload = p.payload or {}
+            key = (payload.get("namespace", ""), payload.get("source", "unknown"))
+            found.setdefault(key, set()).add(payload.get("doc_hash", ""))
+        return found
+
+    async def export(self, namespace: str, source: str) -> list[Chunk]:
+        from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+        flt = Filter(
+            must=[
+                FieldCondition(key="namespace", match=MatchValue(value=namespace)),
+                FieldCondition(key="source", match=MatchValue(value=source)),
+            ]
+        )
+        chunks = []
+        for p in await self._scroll(flt, True):
+            payload = dict(p.payload or {})
+            text = payload.pop("text", "")
+            payload.pop("namespace", None)
+            payload.pop("source", None)
+            ordinal = int(payload.pop("ordinal", 0) or 0)
+            chunks.append(Chunk(text=text, source=source, ordinal=ordinal, metadata=payload))
+        return sorted(chunks, key=lambda c: c.ordinal)

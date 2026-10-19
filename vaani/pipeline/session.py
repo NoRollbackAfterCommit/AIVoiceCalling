@@ -441,7 +441,15 @@ class CallSession:
 
         # 1. Speech to text
         t0 = time.monotonic()
-        transcript = await self._services.stt.transcribe(audio)
+        try:
+            transcript = await self._services.stt.transcribe(audio)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Same failure as the model's below, one step earlier: a speech
+            # service that refuses must not leave the caller in silence.
+            await self._apologise(exc)
+            return
         metrics.stt_ms = int((time.monotonic() - t0) * 1000)
 
         if self._awaiting_language:
@@ -485,7 +493,20 @@ class CallSession:
 
         # 2. Think
         t0 = time.monotonic()
-        turn = await self._agent.respond(transcript.text)
+        try:
+            # Bounded as a whole, not per request: a turn can make several model
+            # calls (tools), each retried, and the caller hears only the hold
+            # tone throughout. Past the budget an apology beats more waiting.
+            async with asyncio.timeout(_TURN_BUDGET_S):
+                turn = await self._agent.respond(transcript.text)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # A model that refuses (429, quota, outage) must not end the turn in
+            # silence: this task has no one awaiting it, so an escaped exception
+            # dies unnoticed and the caller holds a dead line until they hang up.
+            await self._apologise(exc)
+            return
         metrics.agent_ms = int((time.monotonic() - t0) * 1000)
 
         if turn.tool_calls:
@@ -559,6 +580,19 @@ class CallSession:
             await self.hangup("completed")
             return
 
+        if self.state != CallState.ENDED:
+            self._set_state(CallState.LISTENING)
+
+    async def _apologise(self, exc: Exception) -> None:
+        """Tell the caller this turn failed, and go back to listening."""
+        log.exception("agent turn failed", extra={"error": type(exc).__name__})
+        await self._transport.send_event({"type": "turn_failed", "error": type(exc).__name__})
+        await self._stop_hold()
+        text = TURN_FAILED.get(self._language.current, TURN_FAILED["en-IN"])
+        # Into the history too, so the model's next reply knows the caller was
+        # asked to repeat themselves rather than seeing a question left hanging.
+        self._agent.note_assistant(text)
+        await self._speak(text, kind="apology")
         if self.state != CallState.ENDED:
             self._set_state(CallState.LISTENING)
 
@@ -996,6 +1030,25 @@ CONFIRMATIONS: dict[str, str] = {
     "gu-IN": "સારું, આપણે ગુજરાતીમાં વાત કરીશું. હું આપની કેવી મદદ કરી શકું?",
     "pa-IN": "ਠੀਕ ਹੈ, ਅਸੀਂ ਪੰਜਾਬੀ ਵਿੱਚ ਗੱਲ ਕਰਾਂਗੇ। ਮੈਂ ਤੁਹਾਡੀ ਕੀ ਮਦਦ ਕਰ ਸਕਦਾ ਹਾਂ?",
     "od-IN": "ଠିକ ଅଛି, ଆମେ ଓଡ଼ିଆରେ କଥା ହେବା। ମୁଁ ଆପଣଙ୍କୁ କିପରି ସାହାଯ୍ୟ କରିପାରିବି?",
+}
+
+
+# The longest a caller waits on the hold tone for one answer. The measured
+# median is under 3 s and a turn with two tool calls about 6 s; well past that,
+# something upstream is failing slowly and an apology serves the caller better.
+_TURN_BUDGET_S = 15.0
+
+
+# Spoken when the model could not answer a turn. Fixed text rather than
+# generated, because the model is exactly what just failed.
+TURN_FAILED: dict[str, str] = {
+    "en-IN": "Sorry, I could not get that just now. Could you please say it again?",
+    "hi-IN": "माफ़ कीजिए, मैं अभी यह समझ नहीं पाया। क्या आप कृपया फिर से कह सकते हैं?",
+    "bn-IN": "দুঃখিত, আমি এই মুহূর্তে বুঝতে পারিনি। আপনি কি দয়া করে আবার বলবেন?",
+    "mr-IN": "माफ करा, मला आत्ता ते समजले नाही. कृपया पुन्हा सांगाल का?",
+    "gu-IN": "માફ કરશો, હું અત્યારે સમજી શક્યો નહીં. કૃપા કરીને ફરીથી કહેશો?",
+    "pa-IN": "ਮਾਫ਼ ਕਰਨਾ, ਮੈਂ ਹੁਣੇ ਸਮਝ ਨਹੀਂ ਸਕਿਆ। ਕੀ ਤੁਸੀਂ ਕਿਰਪਾ ਕਰਕੇ ਦੁਬਾਰਾ ਕਹਿ ਸਕਦੇ ਹੋ?",
+    "od-IN": "କ୍ଷମା କରିବେ, ମୁଁ ବର୍ତ୍ତମାନ ବୁଝିପାରିଲି ନାହିଁ। ଦୟାକରି ପୁଣି କହିବେ କି?",
 }
 
 

@@ -25,6 +25,7 @@ from vaani.core.logging import configure_logging, get_logger
 from vaani.core.registry import build_services
 from vaani.db.accounts import AccountRepository
 from vaani.db.analytics import AnalyticsRepository
+from vaani.db.knowledge import KnowledgeRepository
 from vaani.db.profiles import ProfileRepository
 from vaani.db.repository import CallRepository
 from vaani.db.tenancy import TenancyRepository
@@ -60,6 +61,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     services.tenancy = TenancyRepository(repository.sessions)
     services.accounts = AccountRepository(repository.sessions)
     services.analytics = AnalyticsRepository(repository.sessions)
+    # The uploaded documents themselves, so the vector index is a cache that can
+    # be rebuilt rather than the only copy.
+    services.retriever.use_documents(KnowledgeRepository(repository.sessions))
 
     # Generated once and kept, rather than per boot: a random key each start
     # would sign every operator out whenever the container restarted, including
@@ -109,6 +113,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await telephony.start()
 
     await _seed_knowledge(services)
+    healer = asyncio.create_task(_keep_knowledge_indexed(services), name="knowledge-healer")
 
     log.info("vaani ready", extra={"port": settings.port, "env": settings.env})
     try:
@@ -120,9 +125,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             # calls that will only ever hear the shutdown.
             await telephony.stop()
         await app.state.calls.drain(timeout=15)
-        retention.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await retention
+        for task in (retention, healer):
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
         await services.close()
         await repository.close()
 
@@ -143,6 +149,31 @@ async def _enforce_retention(repository, settings: Settings) -> None:
         await asyncio.sleep(24 * 3600)
 
 
+async def _keep_knowledge_indexed(services, interval_s: float = 300) -> None:
+    """Reconnect to the knowledge store when it comes back, and refill it.
+
+    A hosted store can disappear under a running deployment — the pilot's
+    Qdrant cluster went dark for weeks while calls kept arriving — and come back
+    empty. Every pass either finishes a start that failed at boot or reconciles
+    the index with the documents in the database; both are no-ops when nothing
+    is wrong. Read through `services` each time, because a settings save
+    replaces the retriever.
+    """
+    while True:
+        await asyncio.sleep(interval_s)
+        retriever = services.retriever
+        try:
+            if not retriever.ready:
+                await retriever.start()
+                log.info("knowledge store reachable again")
+            else:
+                await retriever.sync()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning("knowledge store still unavailable", extra={"error": type(exc).__name__})
+
+
 async def _seed_knowledge(services) -> None:
     """Index anything sitting in ./knowledge at boot.
 
@@ -152,10 +183,14 @@ async def _seed_knowledge(services) -> None:
     folder = Path("./knowledge")
     if not folder.is_dir():
         return
+    # The folder's own README explains the folder; indexed, the bot would
+    # answer callers with a description of this platform.
     paths = [
         p
         for p in folder.rglob("*")
-        if p.is_file() and p.suffix.lower() in {".txt", ".md", ".pdf", ".docx", ".html"}
+        if p.is_file()
+        and p.suffix.lower() in {".txt", ".md", ".pdf", ".docx", ".html"}
+        and p.name.lower() != "readme.md"
     ]
     if not paths:
         return

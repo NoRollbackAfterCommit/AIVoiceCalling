@@ -192,7 +192,14 @@ class Services:
         await self.stt.start()
         await self.llm.start()
         await self.tts.start()
-        await self.retriever.start()
+        try:
+            await self.retriever.start()
+        except Exception:
+            # Knowledge is the one provider a call can run without. A hosted
+            # vector store that is down must not stop the phone being answered;
+            # the agent answers without documents and the healer in main.py
+            # keeps retrying until the store is back.
+            log.exception("knowledge store unavailable at boot; answering without it")
         log.info("providers ready")
 
     async def close(self) -> None:
@@ -282,16 +289,21 @@ class Services:
         ):
             # This one does discard the in-memory index — the vectors are not
             # portable across embedding models, so there is nothing to carry.
+            # The vectors are not portable across embedding models, so the new
+            # index starts empty and is refilled from the documents kept in the
+            # database. Without that store (a bare install) it stays empty.
             retriever = Retriever(
                 store=build_store(new),
                 embedder=build_embedder(new),
                 top_k=new.rag_top_k,
                 min_score=new.rag_min_score,
+                documents=self.retriever.documents,
             )
             await retriever.start()
             self.retriever = retriever
             rebuilt.append("knowledge")
-            log.warning("knowledge store rebuilt; re-ingest documents if it was in-memory")
+            if retriever.documents is None:
+                log.warning("knowledge store rebuilt; re-ingest documents if it was in-memory")
         else:
             # Cheap knobs that need no rebuild.
             self.retriever._top_k = new.rag_top_k
