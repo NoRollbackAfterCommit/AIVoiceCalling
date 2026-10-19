@@ -13,7 +13,10 @@ dependencies = [
     "pydantic-settings>=2.6",
     "httpx>=0.27",
     "python-multipart>=0.0.12",
-    "sqlalchemy>=2.0",
+    # [asyncio] pulls in greenlet, which newer SQLAlchemy releases no longer
+    # install by default; without it the app cannot import its own database
+    # layer, and a rebuild on 2026-10-19 crash-looped production on exactly that.
+    "sqlalchemy[asyncio]>=2.0",
     "aiosqlite>=0.20",
     "numpy>=1.26",
     # Saarika realtime speech recognition is a WebSocket; httpx cannot do WS.
